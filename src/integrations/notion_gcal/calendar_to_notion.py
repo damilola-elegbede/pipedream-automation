@@ -27,6 +27,9 @@ def get_event_time(time_obj: Dict[str, Any]) -> Optional[str]:
     Returns:
         The extracted date/time string or None if extraction fails
     """
+    if time_obj is None:
+        return None
+
     # Try dateTime first (for timed events)
     time_str = safe_get(time_obj, ["dateTime"])
     if time_str is not None:

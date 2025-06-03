@@ -55,7 +55,7 @@ def safe_get(data: Any, keys: Union[str, List[Union[str, int]]], default: Any = 
             return default
     return current
 
-def extract_id_from_url(url: str, pattern: str = r'[a-f0-9]{32}$') -> Optional[str]:
+def extract_id_from_url(url: str, pattern: str = r'[a-f0-9]{32}') -> Optional[str]:
     """
     Extracts an ID from a URL using a regex pattern.
 
@@ -68,9 +68,12 @@ def extract_id_from_url(url: str, pattern: str = r'[a-f0-9]{32}$') -> Optional[s
     """
     try:
         import re
-        match = re.search(pattern, url)
-        if match:
-            return match.group(0)
+        # Remove query parameters and fragments
+        url = url.split('?')[0].split('#')[0]
+        # Find all matches and take the last one (most specific)
+        matches = re.findall(pattern, url)
+        if matches:
+            return matches[-1]
     except Exception as e:
         logger.error(f"Error extracting ID from URL '{url}': {e}")
     return None 

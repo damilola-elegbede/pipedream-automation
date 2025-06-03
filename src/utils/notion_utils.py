@@ -22,7 +22,8 @@ def extract_notion_task_data(trigger_event: Dict[str, Any]) -> Dict[str, Any]:
 
     Returns:
         Dictionary containing extracted task data:
-        - due_date: Task due date
+        - due_date_start: Task start date
+        - due_date_end: Task end date
         - task_name: Name of the task
         - event_id: Google Calendar event ID (if exists)
         - notion_id: Notion page ID
@@ -30,9 +31,10 @@ def extract_notion_task_data(trigger_event: Dict[str, Any]) -> Dict[str, Any]:
     """
     # Extract basic task data
     task_data = {
-        "due_date": safe_get(trigger_event, ["properties", "Due date", "date", "start"]),
-        "task_name": safe_get(trigger_event, ["properties", "Name", "title", 0, "text", "content"], "Untitled Task"),
-        "event_id": safe_get(trigger_event, ["properties", "Google Event ID", "rich_text", 0, "text", "content"]),
+        "due_date_start": safe_get(trigger_event, ["properties", "Due Date", "date", "start"]),
+        "due_date_end": safe_get(trigger_event, ["properties", "Due Date", "date", "end"]),
+        "task_name": safe_get(trigger_event, ["properties", "Task name", "title", 0, "plain_text"], "Untitled Task"),
+        "event_id": safe_get(trigger_event, ["properties", "Google Event ID", "rich_text", 0, "plain_text"]),
         "notion_id": safe_get(trigger_event, ["id"]),
         "url": safe_get(trigger_event, ["url"])
     }
