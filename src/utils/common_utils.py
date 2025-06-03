@@ -75,6 +75,8 @@ def extract_id_from_url(url: str, pattern: str = r'[a-f0-9]{32}') -> Optional[st
         if pattern.endswith('$'):
             # Remove the $ anchor for searching
             search_pattern = pattern[:-1]
+            # Use word boundaries to ensure exact matches
+            search_pattern = r'\b' + search_pattern + r'\b'
             matches = re.findall(search_pattern, url)
             if matches:
                 last_match = matches[-1]
