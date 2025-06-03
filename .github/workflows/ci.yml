@@ -11,8 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11"]
-        python-name: ["Python 3.8", "Python 3.9", "Python 3.10", "Python 3.11"]
+        python-version: ["3.8", "3.12"]  # System Python (3.8) and Latest (3.12)
+        python-name: ["System Python 3.8", "Latest Python 3.12"]
 
     steps:
     - uses: actions/checkout@v3
@@ -38,21 +38,10 @@ jobs:
         python -m pip install --upgrade pip setuptools wheel
         pip install -r requirements.txt
     
-    - name: Create necessary directories
+    - name: List directory contents
       run: |
-        mkdir -p src/utils
-        mkdir -p src/integrations/notion_gcal
-        mkdir -p src/integrations/gmail_notion
-        mkdir -p tests/test_utils
-        mkdir -p tests/test_notion_gcal
-        touch src/__init__.py
-        touch src/utils/__init__.py
-        touch src/integrations/__init__.py
-        touch src/integrations/notion_gcal/__init__.py
-        touch src/integrations/gmail_notion/__init__.py
-        touch tests/__init__.py
-        touch tests/test_utils/__init__.py
-        touch tests/test_notion_gcal/__init__.py
+        echo "Current directory structure:"
+        ls -R
     
     - name: Run linting
       run: |
