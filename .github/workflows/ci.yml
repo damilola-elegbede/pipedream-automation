@@ -38,10 +38,15 @@ jobs:
         python -m pip install --upgrade pip setuptools wheel
         pip install -r requirements.txt
     
-    - name: List directory contents
+    - name: Debug repository structure
       run: |
-        echo "Current directory structure:"
-        ls -R
+        echo "Current working directory: $(pwd)"
+        echo "Directory contents:"
+        ls -la
+        echo "Tests directory contents:"
+        ls -la tests/
+        echo "Source directory contents:"
+        ls -la src/
     
     - name: Run linting
       run: |
