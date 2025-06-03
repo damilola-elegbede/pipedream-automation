@@ -12,13 +12,14 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.8", "3.9", "3.10", "3.11"]
+        python-name: ["Python 3.8", "Python 3.9", "Python 3.10", "Python 3.11"]
 
     steps:
     - uses: actions/checkout@v3
       with:
         fetch-depth: 0  # Fetch all history for better versioning
     
-    - name: Set up Python ${{ matrix.python-version }}
+    - name: Set up ${{ matrix.python-name }}
       uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.python-version }}
@@ -40,15 +41,18 @@ jobs:
     - name: Create necessary directories
       run: |
         mkdir -p src/utils
-        mkdir -p src/integrations
+        mkdir -p src/integrations/notion_gcal
+        mkdir -p src/integrations/gmail_notion
         mkdir -p tests/test_utils
-        mkdir -p tests/test_integrations
+        mkdir -p tests/test_notion_gcal
         touch src/__init__.py
         touch src/utils/__init__.py
         touch src/integrations/__init__.py
+        touch src/integrations/notion_gcal/__init__.py
+        touch src/integrations/gmail_notion/__init__.py
         touch tests/__init__.py
         touch tests/test_utils/__init__.py
-        touch tests/test_integrations/__init__.py
+        touch tests/test_notion_gcal/__init__.py
     
     - name: Run linting
       run: |
@@ -60,7 +64,7 @@ jobs:
     
     - name: Run tests with coverage
       run: |
-        pytest --cov=src --cov-report=xml
+        python -m pytest --cov=src --cov-report=xml -v
     
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
