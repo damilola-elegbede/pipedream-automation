@@ -70,15 +70,21 @@ def extract_id_from_url(url: str, pattern: str = r'[a-f0-9]{32}') -> Optional[st
         import re
         # Remove query parameters and fragments
         url = url.split('?')[0].split('#')[0]
-        # Find all matches and take the last one (most specific)
-        matches = re.findall(pattern, url)
-        if matches:
-            # For custom patterns with $ anchor, we need to check if the match is at the end
-            if pattern.endswith('$'):
+        
+        # For patterns with $ anchor, we need to check if the match is at the end
+        if pattern.endswith('$'):
+            # Remove the $ anchor for searching
+            search_pattern = pattern[:-1]
+            matches = re.findall(search_pattern, url)
+            if matches:
                 last_match = matches[-1]
-                if url.endswith(last_match):
+                # Check if the match is at the end of the URL or followed by a path separator
+                if url.endswith(last_match) or f"{last_match}/" in url:
                     return last_match
-            else:
+        else:
+            # For patterns without $ anchor, just find all matches and take the last one
+            matches = re.findall(pattern, url)
+            if matches:
                 return matches[-1]
     except Exception as e:
         logger.error(f"Error extracting ID from URL '{url}': {e}")

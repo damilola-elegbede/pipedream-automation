@@ -18,28 +18,39 @@ def extract_notion_task_data(trigger_event: Dict[str, Any]) -> Dict[str, Any]:
     Extracts relevant data from a Notion task trigger event.
 
     Args:
-        trigger_event: The Notion trigger event data
+        trigger_event: The trigger event data from Notion
 
     Returns:
-        Dictionary containing extracted task data:
-        - due_date_start: Task start date
-        - due_date_end: Task end date
-        - task_name: Name of the task
-        - event_id: Google Calendar event ID (if exists)
-        - notion_id: Notion page ID
-        - url: Notion page URL
+        Dictionary containing extracted task data
     """
-    # Extract basic task data
+    properties = safe_get(trigger_event, ["properties"], default={})
+    
+    # Extract due date
+    due_date = safe_get(properties, ["Due Date", "date"], default={})
+    due_date_start = safe_get(due_date, ["start"])
+    due_date_end = safe_get(due_date, ["end"])
+
+    # Extract task name
+    task_name = safe_get(properties, ["Task name", "title", 0, "plain_text"], default="Untitled Task")
+
+    # Extract Google Event ID
+    event_id = safe_get(properties, ["Google Event ID", "rich_text", 0, "plain_text"])
+    if not event_id and isinstance(safe_get(properties, ["Google Event ID", "rich_text"]), list):
+        event_id = safe_get(properties, ["Google Event ID", "rich_text", 0])
+
+    # Extract Notion page ID and URL
+    notion_id = safe_get(trigger_event, ["id"])
+    notion_url = safe_get(trigger_event, ["url"])
+
     task_data = {
-        "due_date_start": safe_get(trigger_event, ["properties", "Due Date", "date", "start"]),
-        "due_date_end": safe_get(trigger_event, ["properties", "Due Date", "date", "end"]),
-        "task_name": safe_get(trigger_event, ["properties", "Task name", "title", 0, "plain_text"], "Untitled Task"),
-        "event_id": safe_get(trigger_event, ["properties", "Google Event ID", "rich_text", 0, "plain_text"]),
-        "notion_id": safe_get(trigger_event, ["id"]),
-        "url": safe_get(trigger_event, ["url"])
+        "due_date_start": due_date_start,
+        "due_date_end": due_date_end,
+        "task_name": task_name,
+        "event_id": event_id,
+        "notion_id": notion_id,
+        "url": notion_url
     }
 
-    # Log extracted data
     logger.info(f"Extracted task data: {task_data}")
     return task_data
 
