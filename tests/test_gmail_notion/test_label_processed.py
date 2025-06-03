@@ -178,4 +178,146 @@ def test_handler_invalid_data():
     assert (
         "Invalid data format" in result["error"]
         or "Could not find Label ID" in result["error"]
-    ) 
+    )
+
+
+@patch("requests.post")
+@patch("requests.get")
+def test_handler_http_error_403(mock_get, mock_post):
+    """Test handling of HTTP 403 error during message modification."""
+    mock_label_response = Mock()
+    mock_label_response.json.return_value = {
+        "labels": [{"name": "notiontaskcreated", "id": "label-123"}]
+    }
+    mock_get.return_value = mock_label_response
+    
+    mock_error_response = Mock()
+    mock_error_response.status_code = 403
+    mock_error_response.json.return_value = {"error": {"message": "Forbidden"}}
+    mock_post.side_effect = requests.exceptions.HTTPError(response=mock_error_response)
+    
+    pd = MockPipedream(
+        steps={
+            "notion": {
+                "$return_value": {
+                    "successful_mappings": [{"gmail_message_id": "msg-123"}]
+                }
+            }
+        },
+        inputs={"gmail": {"$auth": {"oauth_access_token": "test-token"}}},
+    )
+    result = handler(pd)
+    assert result["status"] == "Completed"
+    assert result["errors"][0]["status_code"] == 403
+    assert "Forbidden" in result["errors"][0]["error"]
+
+
+@patch("requests.post")
+@patch("requests.get")
+def test_handler_http_error_400_and_404(mock_get, mock_post):
+    """Test handling of HTTP 400 and 404 errors during message modification."""
+    mock_label_response = Mock()
+    mock_label_response.json.return_value = {
+        "labels": [{"name": "notiontaskcreated", "id": "label-123"}]
+    }
+    mock_get.return_value = mock_label_response
+    
+    # 400 Bad Request
+    mock_error_response_400 = Mock()
+    mock_error_response_400.status_code = 400
+    mock_error_response_400.json.return_value = {"error": {"message": "Bad Request"}}
+    # 404 Not Found
+    mock_error_response_404 = Mock()
+    mock_error_response_404.status_code = 404
+    mock_error_response_404.json.return_value = {"error": {"message": "Not Found"}}
+    
+    # Test 400
+    mock_post.side_effect = requests.exceptions.HTTPError(response=mock_error_response_400)
+    pd_400 = MockPipedream(
+        steps={"notion": {"$return_value": {"successful_mappings": [{"gmail_message_id": "msg-400"}]}}},
+        inputs={"gmail": {"$auth": {"oauth_access_token": "test-token"}}},
+    )
+    result_400 = handler(pd_400)
+    assert result_400["errors"][0]["status_code"] == 400
+    assert "Bad Request" in result_400["errors"][0]["error"]
+    
+    # Test 404
+    mock_post.side_effect = requests.exceptions.HTTPError(response=mock_error_response_404)
+    pd_404 = MockPipedream(
+        steps={"notion": {"$return_value": {"successful_mappings": [{"gmail_message_id": "msg-404"}]}}},
+        inputs={"gmail": {"$auth": {"oauth_access_token": "test-token"}}},
+    )
+    result_404 = handler(pd_404)
+    assert result_404["errors"][0]["status_code"] == 404
+    assert "Not Found" in result_404["errors"][0]["error"]
+
+
+@patch("requests.post")
+@patch("requests.get")
+def test_handler_request_exception(mock_get, mock_post):
+    """Test handling of RequestException during message modification."""
+    mock_label_response = Mock()
+    mock_label_response.json.return_value = {
+        "labels": [{"name": "notiontaskcreated", "id": "label-123"}]
+    }
+    mock_get.return_value = mock_label_response
+    mock_post.side_effect = requests.exceptions.RequestException("Network error")
+    pd = MockPipedream(
+        steps={"notion": {"$return_value": {"successful_mappings": [{"gmail_message_id": "msg-req"}]}}},
+        inputs={"gmail": {"$auth": {"oauth_access_token": "test-token"}}},
+    )
+    result = handler(pd)
+    assert result["errors"][0]["error"].startswith("Request failed:")
+
+
+@patch("requests.post")
+@patch("requests.get")
+def test_handler_unexpected_exception(mock_get, mock_post):
+    """Test handling of unexpected Exception during message modification."""
+    mock_label_response = Mock()
+    mock_label_response.json.return_value = {
+        "labels": [{"name": "notiontaskcreated", "id": "label-123"}]
+    }
+    mock_get.return_value = mock_label_response
+    mock_post.side_effect = Exception("Unexpected!")
+    pd = MockPipedream(
+        steps={"notion": {"$return_value": {"successful_mappings": [{"gmail_message_id": "msg-x"}]}}},
+        inputs={"gmail": {"$auth": {"oauth_access_token": "test-token"}}},
+    )
+    result = handler(pd)
+    assert result["errors"][0]["error"].startswith("Unexpected error:")
+
+
+@patch("src.integrations.gmail_notion.label_processed.get_label_id", return_value="label-123")
+def test_handler_no_valid_message_ids(mock_label_id):
+    """Test handling of mappings with no valid gmail_message_id."""
+    pd = MockPipedream(
+        steps={"notion": {"$return_value": {"successful_mappings": [{"not_gmail_id": "x"}]}}},
+        inputs={"gmail": {"$auth": {"oauth_access_token": "test-token"}}},
+    )
+    result = handler(pd)
+    assert result["status"] == "No valid message IDs"
+    assert result["labeled_messages"] == 0
+
+
+@patch("src.integrations.gmail_notion.label_processed.get_label_id", return_value="label-123")
+def test_handler_no_data_received(mock_label_id):
+    """Test handling of empty successful_mappings list."""
+    pd = MockPipedream(
+        steps={"notion": {"$return_value": {"successful_mappings": []}}},
+        inputs={"gmail": {"$auth": {"oauth_access_token": "test-token"}}},
+    )
+    result = handler(pd)
+    assert result["status"] == "No data received"
+    assert result["labeled_messages"] == 0
+
+
+@patch("src.integrations.gmail_notion.label_processed.get_label_id", return_value="label-123")
+def test_handler_non_list_successful_mappings(mock_label_id):
+    """Test handling of non-list successful_mappings."""
+    pd = MockPipedream(
+        steps={"notion": {"$return_value": {"successful_mappings": "notalist"}}},
+        inputs={"gmail": {"$auth": {"oauth_access_token": "test-token"}}},
+    )
+    result = handler(pd)
+    assert result["error"] == "Invalid data format for successful_mappings." 
