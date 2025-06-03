@@ -9,22 +9,27 @@ The main handler function expects a Pipedream context object and returns a list
 of email details including headers, body content, and metadata.
 """
 
-import requests
-import time
 import base64
 import logging
+import time
 from typing import Any, Dict, List, Optional
+
+import requests
+
 from src.utils.common_utils import safe_get
 
 # Configure basic logging for Pipedream
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-def get_header_value(headers: List[Dict[str, str]], name: str) -> Optional[str]:
+
+def get_header_value(headers: List[Dict[str, str]],
+                     name: str) -> Optional[str]:
     for header in headers:
         if safe_get(header, "name", "").lower() == name.lower():
             return safe_get(header, "value")
     return None
+
 
 def get_body_parts(parts: List[Dict[str, Any]]) -> Dict[str, str]:
     result = {"text": "", "html": ""}
@@ -43,6 +48,7 @@ def get_body_parts(parts: List[Dict[str, Any]]) -> Dict[str, str]:
             result["text"] += nested_result["text"]
             result["html"] += nested_result["html"]
     return result
+
 
 def handler(pd: "pipedream") -> List[Dict[str, Any]]:
     """
@@ -63,7 +69,10 @@ def handler(pd: "pipedream") -> List[Dict[str, Any]]:
         return []
     required_labels = ["INBOX", "UNREAD"]
     excluded_labels = ["SENT", "DRAFT", "SPAM", "TRASH"]
-    search_query = " ".join([f"label:{label}" for label in required_labels] + [f"-label:{label}" for label in excluded_labels])
+    search_query = " ".join(
+        [f"label:{label}" for label in required_labels]
+        + [f"-label:{label}" for label in excluded_labels]
+    )
     message_ids = []
     page_token = None
     while True:
@@ -72,7 +81,11 @@ def handler(pd: "pipedream") -> List[Dict[str, Any]]:
             params = {"q": search_query, "maxResults": 100}
             if page_token:
                 params["pageToken"] = page_token
-            response = requests.get(list_url, headers={"Authorization": f"Bearer {access_token}"}, params=params)
+            response = requests.get(
+                list_url,
+                headers={"Authorization": f"Bearer {access_token}"},
+                params=params,
+            )
             response.raise_for_status()
             data = response.json()
             messages = safe_get(data, ["messages"], [])
@@ -87,8 +100,11 @@ def handler(pd: "pipedream") -> List[Dict[str, Any]]:
     email_details = []
     for msg_id in message_ids:
         try:
-            msg_url = f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}"
-            response = requests.get(msg_url, headers={"Authorization": f"Bearer {access_token}"})
+            msg_url = (
+                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}")
+            response = requests.get(
+                msg_url, headers={"Authorization": f"Bearer {access_token}"}
+            )
             response.raise_for_status()
             message = response.json()
             headers = safe_get(message, ["payload", "headers"], [])
@@ -98,19 +114,21 @@ def handler(pd: "pipedream") -> List[Dict[str, Any]]:
             date = get_header_value(headers, "Date") or "Unknown Date"
             body_parts = get_body_parts([safe_get(message, ["payload"], {})])
             gmail_url = f"https://mail.google.com/mail/u/0/#inbox/{msg_id}"
-            email_details.append({
-                "id": msg_id,
-                "subject": subject,
-                "from": from_addr,
-                "to": to_addr,
-                "date": date,
-                "text_content": body_parts["text"],
-                "html_content": body_parts["html"],
-                "url": gmail_url
-            })
+            email_details.append(
+                {
+                    "id": msg_id,
+                    "subject": subject,
+                    "from": from_addr,
+                    "to": to_addr,
+                    "date": date,
+                    "text_content": body_parts["text"],
+                    "html_content": body_parts["html"],
+                    "url": gmail_url,
+                }
+            )
             time.sleep(0.1)
         except requests.exceptions.RequestException as e:
             logger.error(f"Error fetching message {msg_id}: {e}")
             continue
     logger.info(f"Found {len(email_details)} matching emails")
-    return email_details 
+    return email_details

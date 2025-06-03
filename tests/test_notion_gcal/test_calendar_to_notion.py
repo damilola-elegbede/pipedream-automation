@@ -5,22 +5,24 @@ This module contains tests for the handler that processes Google Calendar events
 and extracts Notion page IDs from their location URLs.
 """
 
-import pytest
 from datetime import datetime, timedelta
-from src.utils.common_utils import safe_get, extract_id_from_url
-from src.integrations.notion_gcal.calendar_to_notion import (
-    get_event_time,
-    handler
-)
+
+
+from src.integrations.notion_gcal.calendar_to_notion import get_event_time, handler
+from src.utils.common_utils import extract_id_from_url, safe_get
+
 
 class MockPipedream:
     """Mock Pipedream context object for testing."""
+
     def __init__(self, trigger_data=None):
         self.steps = {"trigger": {"event": trigger_data or {}}}
         self.flow = MockFlow()
 
+
 class MockFlow:
     """Mock Flow object for testing exit conditions."""
+
     def __init__(self):
         self.exit_called = False
         self.exit_message = None
@@ -28,6 +30,7 @@ class MockFlow:
     def exit(self, message):
         self.exit_called = True
         self.exit_message = message
+
 
 def test_safe_get():
     """Test the safe_get function for accessing nested data structures."""
@@ -49,17 +52,29 @@ def test_safe_get():
     assert safe_get({}, ["a", "b"], "default") == "default"
     assert safe_get([], [0], "default") == "default"
 
+
 def test_extract_notion_page_id():
     """Test the extract_notion_page_id function."""
     # Valid Notion URLs
-    assert extract_id_from_url("https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef") == "1234567890abcdef1234567890abcdef"
-    assert extract_id_from_url("https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef?pvs=4") == "1234567890abcdef1234567890abcdef"
+    assert (
+        extract_id_from_url(
+            "https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef"
+        )
+        == "1234567890abcdef1234567890abcdef"
+    )
+    assert (
+        extract_id_from_url(
+            "https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef?pvs=4"
+        )
+        == "1234567890abcdef1234567890abcdef"
+    )
 
     # Invalid URLs
     assert extract_id_from_url("https://www.notion.so/My-Page") is None
     assert extract_id_from_url("https://example.com/page-123") is None
     assert extract_id_from_url("") is None
     assert extract_id_from_url(None) is None
+
 
 def test_get_event_time():
     """Test the get_event_time function."""
@@ -78,17 +93,20 @@ def test_get_event_time():
     # Test invalid object
     assert get_event_time(None) is None
 
+
 def test_handler_valid_event():
     """Test handler with valid Notion-linked event data."""
     # Create test data
     tomorrow = (datetime.now() + timedelta(days=1)).isoformat()
     day_after = (datetime.now() + timedelta(days=2)).isoformat()
-    
+
     trigger_data = {
         "summary": "Test Event",
         "location": "https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef",
-        "start": {"dateTime": tomorrow},
-        "end": {"dateTime": day_after}
+        "start": {
+            "dateTime": tomorrow},
+        "end": {
+            "dateTime": day_after},
     }
 
     pd = MockPipedream(trigger_data)
@@ -100,13 +118,14 @@ def test_handler_valid_event():
     assert result["End"] == day_after
     assert result["Id"] == "1234567890abcdef1234567890abcdef"
 
+
 def test_handler_non_notion_event():
     """Test handler with non-Notion event."""
     trigger_data = {
         "summary": "Test Event",
         "location": "https://example.com/meeting",
         "start": {"dateTime": "2024-03-20T10:00:00Z"},
-        "end": {"dateTime": "2024-03-20T11:00:00Z"}
+        "end": {"dateTime": "2024-03-20T11:00:00Z"},
     }
 
     pd = MockPipedream(trigger_data)
@@ -114,13 +133,14 @@ def test_handler_non_notion_event():
 
     assert pd.flow.exit_called
     assert "does not have a Notion URL" in pd.flow.exit_message
+
 
 def test_handler_missing_location():
     """Test handler with missing location."""
     trigger_data = {
         "summary": "Test Event",
         "start": {"dateTime": "2024-03-20T10:00:00Z"},
-        "end": {"dateTime": "2024-03-20T11:00:00Z"}
+        "end": {"dateTime": "2024-03-20T11:00:00Z"},
     }
 
     pd = MockPipedream(trigger_data)
@@ -129,13 +149,16 @@ def test_handler_missing_location():
     assert pd.flow.exit_called
     assert "does not have a Notion URL" in pd.flow.exit_message
 
+
 def test_handler_all_day_event():
     """Test handler with all-day event."""
     trigger_data = {
         "summary": "Test Event",
         "location": "https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef",
-        "start": {"date": "2024-03-20"},
-        "end": {"date": "2024-03-21"}
+        "start": {
+            "date": "2024-03-20"},
+        "end": {
+            "date": "2024-03-21"},
     }
 
     pd = MockPipedream(trigger_data)
@@ -144,16 +167,19 @@ def test_handler_all_day_event():
     assert result["Start"] == "2024-03-20"
     assert result["End"] == "2024-03-21"
 
+
 def test_handler_missing_end_time():
     """Test handler with missing end time."""
     trigger_data = {
         "summary": "Test Event",
         "location": "https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef",
-        "start": {"dateTime": "2024-03-20T10:00:00Z"}
+        "start": {
+            "dateTime": "2024-03-20T10:00:00Z"},
     }
 
     pd = MockPipedream(trigger_data)
     result = handler(pd)
 
     assert result["Start"] == "2024-03-20T10:00:00Z"
-    assert result["End"] == "2024-03-20T10:00:00Z"  # Should fallback to start time 
+    # Should fallback to start time
+    assert result["End"] == "2024-03-20T10:00:00Z"

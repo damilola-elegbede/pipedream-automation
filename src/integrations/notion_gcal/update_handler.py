@@ -10,12 +10,14 @@ dictionary containing the formatted data for updating a Google Calendar event.
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict
+
 from src.utils.common_utils import safe_get
 
 # Configure basic logging for Pipedream
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
 
 def handler(pd: "pipedream") -> Dict[str, Any]:
     """
@@ -32,18 +34,23 @@ def handler(pd: "pipedream") -> Dict[str, Any]:
         SystemExit: If required data (due date or event ID) is missing
     """
     # --- 1. Safely extract data using the helper function ---
-    trigger_event_page = safe_get(pd.steps, ["trigger", "event", "page"], default={})
+    trigger_event_page = safe_get(
+        pd.steps, ["trigger", "event", "page"], default={})
     properties = safe_get(trigger_event_page, ["properties"], default={})
 
     # Task Name
-    task_name = safe_get(properties, ["Task name", "title", 0, "plain_text"], default="Untitled Task")
+    task_name = safe_get(
+        properties, [
+            "Task name", "title", 0, "plain_text"], default="Untitled Task")
 
     # Due Date information
     due_date_start = safe_get(properties, ["Due Date", "date", "start"])
     due_date_end = safe_get(properties, ["Due Date", "date", "end"])
 
     # Google Event ID - Crucial for update
-    event_id = safe_get(properties, ["Google Event ID", "rich_text", 0, "plain_text"])
+    event_id = safe_get(
+        properties, [
+            "Google Event ID", "rich_text", 0, "plain_text"])
 
     # Notion Page URL
     notion_url = safe_get(trigger_event_page, ["url"])
@@ -51,12 +58,14 @@ def handler(pd: "pipedream") -> Dict[str, Any]:
     # --- 2. Check prerequisites for an update ---
     # Exit if Due Date is missing (required for calendar events)
     if due_date_start is None:
-        exit_message = f"Due Date is missing -- Cannot update event for task: '{task_name}'"
+        exit_message = (
+            f"Due Date is missing -- Cannot update event for task: '{task_name}'")
         logger.info(exit_message)
         pd.flow.exit(exit_message)
         return
 
-    # Exit if Google Event ID is missing (required to know which event to update)
+    # Exit if Google Event ID is missing (required to know which event to
+    # update)
     if not event_id:
         exit_message = f"Google Event ID is missing -- Cannot update, should be a create event for task: '{task_name}'"
         logger.info(exit_message)
@@ -64,7 +73,8 @@ def handler(pd: "pipedream") -> Dict[str, Any]:
         return
 
     # --- 3. Prepare data for event update (if checks passed) ---
-    logger.info(f"Preparing to update event '{event_id}' for task: '{task_name}'")
+    logger.info(
+        f"Preparing to update event '{event_id}' for task: '{task_name}'")
 
     # Use start date as end date if end date is not provided
     final_end_date = due_date_end if due_date_end is not None else due_date_start
@@ -85,6 +95,6 @@ def handler(pd: "pipedream") -> Dict[str, Any]:
             "Update": True,
             "EventId": event_id,
             "Url": notion_url,
-            "Description": f"Notion Task: {task_name}\nLink: {notion_url or 'N/A'}"
-        }
-    } 
+            "Description": f"Notion Task: {task_name}\nLink: {
+                notion_url or 'N/A'}",
+        }}

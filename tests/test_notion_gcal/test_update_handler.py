@@ -5,18 +5,23 @@ This module contains tests for the handler that processes Notion page updates
 and prepares data for updating corresponding Google Calendar events.
 """
 
-import pytest
 from datetime import datetime, timedelta
-from src.integrations.notion_gcal.update_handler import safe_get, handler
+
+
+from src.integrations.notion_gcal.update_handler import handler, safe_get
+
 
 class MockPipedream:
     """Mock Pipedream context object for testing."""
+
     def __init__(self, trigger_data=None):
         self.steps = {"trigger": {"event": trigger_data or {}}}
         self.flow = MockFlow()
 
+
 class MockFlow:
     """Mock Flow object for testing exit conditions."""
+
     def __init__(self):
         self.exit_called = False
         self.exit_message = None
@@ -24,6 +29,7 @@ class MockFlow:
     def exit(self, message):
         self.exit_called = True
         self.exit_message = message
+
 
 def test_safe_get():
     """Test the safe_get function for accessing nested data structures."""
@@ -44,29 +50,21 @@ def test_safe_get():
     assert safe_get({}, ["a", "b"], "default") == "default"
     assert safe_get([], [0], "default") == "default"
 
+
 def test_handler_valid_update():
     """Test handler with valid update data."""
     # Create test data
     tomorrow = (datetime.now() + timedelta(days=1)).isoformat()
     day_after = (datetime.now() + timedelta(days=2)).isoformat()
-    
+
     trigger_data = {
         "page": {
             "url": "https://notion.so/test",
             "properties": {
-                "Task name": {
-                    "title": [{"plain_text": "Test Task"}]
-                },
-                "Due Date": {
-                    "date": {
-                        "start": tomorrow,
-                        "end": day_after
-                    }
-                },
-                "Google Event ID": {
-                    "rich_text": [{"plain_text": "event123"}]
-                }
-            }
+                "Task name": {"title": [{"plain_text": "Test Task"}]},
+                "Due Date": {"date": {"start": tomorrow, "end": day_after}},
+                "Google Event ID": {"rich_text": [{"plain_text": "event123"}]},
+            },
         }
     }
 
@@ -83,19 +81,16 @@ def test_handler_valid_update():
     assert "Notion Task: Test Task" in result["GCal"]["Description"]
     assert "https://notion.so/test" in result["GCal"]["Description"]
 
+
 def test_handler_missing_due_date():
     """Test handler with missing due date."""
     trigger_data = {
         "page": {
             "url": "https://notion.so/test",
             "properties": {
-                "Task name": {
-                    "title": [{"plain_text": "Test Task"}]
-                },
-                "Google Event ID": {
-                    "rich_text": [{"plain_text": "event123"}]
-                }
-            }
+                "Task name": {"title": [{"plain_text": "Test Task"}]},
+                "Google Event ID": {"rich_text": [{"plain_text": "event123"}]},
+            },
         }
     }
 
@@ -105,23 +100,18 @@ def test_handler_missing_due_date():
     assert pd.flow.exit_called
     assert "Due Date is missing" in pd.flow.exit_message
 
+
 def test_handler_missing_event_id():
     """Test handler with missing Google Event ID."""
     tomorrow = (datetime.now() + timedelta(days=1)).isoformat()
-    
+
     trigger_data = {
         "page": {
             "url": "https://notion.so/test",
             "properties": {
-                "Task name": {
-                    "title": [{"plain_text": "Test Task"}]
-                },
-                "Due Date": {
-                    "date": {
-                        "start": tomorrow
-                    }
-                }
-            }
+                "Task name": {"title": [{"plain_text": "Test Task"}]},
+                "Due Date": {"date": {"start": tomorrow}},
+            },
         }
     }
 
@@ -131,23 +121,18 @@ def test_handler_missing_event_id():
     assert pd.flow.exit_called
     assert "Google Event ID is missing" in pd.flow.exit_message
 
+
 def test_handler_untitled_task():
     """Test handler with missing task name."""
     tomorrow = (datetime.now() + timedelta(days=1)).isoformat()
-    
+
     trigger_data = {
         "page": {
             "url": "https://notion.so/test",
             "properties": {
-                "Due Date": {
-                    "date": {
-                        "start": tomorrow
-                    }
-                },
-                "Google Event ID": {
-                    "rich_text": [{"plain_text": "event123"}]
-                }
-            }
+                "Due Date": {"date": {"start": tomorrow}},
+                "Google Event ID": {"rich_text": [{"plain_text": "event123"}]},
+            },
         }
     }
 
@@ -156,26 +141,19 @@ def test_handler_untitled_task():
 
     assert result["GCal"]["Subject"] == "Untitled Task"
 
+
 def test_handler_same_start_end_date():
     """Test handler when start and end dates are the same."""
     tomorrow = (datetime.now() + timedelta(days=1)).isoformat()
-    
+
     trigger_data = {
         "page": {
             "url": "https://notion.so/test",
             "properties": {
-                "Task name": {
-                    "title": [{"plain_text": "Test Task"}]
-                },
-                "Due Date": {
-                    "date": {
-                        "start": tomorrow
-                    }
-                },
-                "Google Event ID": {
-                    "rich_text": [{"plain_text": "event123"}]
-                }
-            }
+                "Task name": {"title": [{"plain_text": "Test Task"}]},
+                "Due Date": {"date": {"start": tomorrow}},
+                "Google Event ID": {"rich_text": [{"plain_text": "event123"}]},
+            },
         }
     }
 
@@ -183,4 +161,4 @@ def test_handler_same_start_end_date():
     result = handler(pd)
 
     assert result["GCal"]["Start"] == tomorrow
-    assert result["GCal"]["End"] == tomorrow 
+    assert result["GCal"]["End"] == tomorrow

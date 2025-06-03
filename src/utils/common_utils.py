@@ -6,13 +6,16 @@ These functions provide common functionality for data access, validation, and pr
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, List, Optional, Union
 
 # Configure basic logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-def safe_get(data: Any, keys: Union[str, List[Union[str, int]]], default: Any = None) -> Any:
+
+def safe_get(
+    data: Any, keys: Union[str, List[Union[str, int]]], default: Any = None
+) -> Any:
     """
     Safely accesses nested dictionary keys or list indices.
 
@@ -37,13 +40,17 @@ def safe_get(data: Any, keys: Union[str, List[Union[str, int]]], default: Any = 
                 if isinstance(key, int) and 0 <= key < len(current):
                     current = current[key]
                 else:
-                    # Log only if index access is attempted, not for .get() on list
+                    # Log only if index access is attempted, not for .get() on
+                    # list
                     if isinstance(key, int):
-                        logger.warning(f"Invalid list index '{key}' for list: {current}")
+                        logger.warning(
+                            f"Invalid list index '{key}' for list: {current}"
+                        )
                     return default
             else:
                 # If current is None or not a dict/list at an intermediate step
-                logger.warning(f"Cannot access key '{key}' in non-dict/list item: {current}")
+                logger.warning(
+                    f"Cannot access key '{key}' in non-dict/list item: {current}")
                 return default
 
             # If .get() returned None or list index access resulted in None
@@ -55,7 +62,10 @@ def safe_get(data: Any, keys: Union[str, List[Union[str, int]]], default: Any = 
             return default
     return current
 
-def extract_id_from_url(url: str, pattern: str = r'[a-f0-9]{32}') -> Optional[str]:
+
+def extract_id_from_url(
+        url: str,
+        pattern: str = r"[a-f0-9]{32}") -> Optional[str]:
     """
     Extracts an ID from a URL using a regex pattern.
 
@@ -68,26 +78,30 @@ def extract_id_from_url(url: str, pattern: str = r'[a-f0-9]{32}') -> Optional[st
     """
     try:
         import re
+
         # Remove query parameters and fragments
-        url = url.split('?')[0].split('#')[0]
-        
-        # For patterns with $ anchor, we need to check if the match is at the end
-        if pattern.endswith('$'):
+        url = url.split("?")[0].split("#")[0]
+
+        # For patterns with $ anchor, we need to check if the match is at the
+        # end
+        if pattern.endswith("$"):
             # Remove the $ anchor for searching
             search_pattern = pattern[:-1]
             # Use word boundaries to ensure exact matches
-            search_pattern = r'\b' + search_pattern + r'\b'
+            search_pattern = r"\b" + search_pattern + r"\b"
             matches = re.findall(search_pattern, url)
             if matches:
                 last_match = matches[-1]
-                # Check if the match is at the end of the URL or followed by a path separator
+                # Check if the match is at the end of the URL or followed by a
+                # path separator
                 if url.endswith(last_match) or f"{last_match}/" in url:
                     return last_match
         else:
-            # For patterns without $ anchor, just find all matches and take the last one
+            # For patterns without $ anchor, just find all matches and take the
+            # last one
             matches = re.findall(pattern, url)
             if matches:
                 return matches[-1]
     except Exception as e:
         logger.error(f"Error extracting ID from URL '{url}': {e}")
-    return None 
+    return None

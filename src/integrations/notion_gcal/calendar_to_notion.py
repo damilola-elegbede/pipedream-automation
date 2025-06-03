@@ -11,11 +11,13 @@ containing the formatted data for Notion page updates.
 
 import logging
 from typing import Any, Dict, Optional
-from src.utils.common_utils import safe_get, extract_id_from_url
+
+from src.utils.common_utils import extract_id_from_url, safe_get
 
 # Configure basic logging for Pipedream
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
 
 def get_event_time(time_obj: Dict[str, Any]) -> Optional[str]:
     """
@@ -41,8 +43,10 @@ def get_event_time(time_obj: Dict[str, Any]) -> Optional[str]:
         return time_str
 
     # Fallback to string representation of the object
-    logger.warning(f"Could not find 'dateTime' or 'date' in time object: {time_obj}")
+    logger.warning(
+        f"Could not find 'dateTime' or 'date' in time object: {time_obj}")
     return str(time_obj)
+
 
 def handler(pd: "pipedream") -> Dict[str, Any]:
     """
@@ -65,7 +69,8 @@ def handler(pd: "pipedream") -> Dict[str, Any]:
 
     # Validate if the event is Notion-related
     if not location or "https://www.notion.so/" not in location:
-        exit_message = f"Event '{event_summary}' does not have a Notion URL in location. Skipping."
+        exit_message = (
+            f"Event '{event_summary}' does not have a Notion URL in location. Skipping.")
         logger.info(exit_message)
         pd.flow.exit(exit_message)
         return
@@ -99,5 +104,5 @@ def handler(pd: "pipedream") -> Dict[str, Any]:
         "Subject": event_summary,
         "Start": start_time,
         "End": end_time,
-        "Id": page_id
-    } 
+        "Id": page_id,
+    }

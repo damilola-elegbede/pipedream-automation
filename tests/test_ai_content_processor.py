@@ -1,103 +1,98 @@
 """
 Tests for the AI Content Processor module.
 """
+from datetime import datetime
+from unittest.mock import Mock, patch
+
 import pytest
-from datetime import date
-from src.integrations.ai_content_processor import get_content_from_path, demote_headings, handler
+
+from src.integrations.ai_content_processor import handler, markdown_to_html, combine_html
+
 
 class MockPipedream:
-    def __init__(self, steps):
-        self.steps = steps
+    """Mock Pipedream context object for testing."""
+    def __init__(self, steps=None):
+        self.steps = steps or {}
+    
+    def get(self, key, default=None):
+        """Simulate dictionary get method."""
+        return self.steps.get(key, default)
 
-def test_get_content_from_path():
-    # Test successful path traversal
-    test_data = {
-        "step1": {
-            "content": ["text1", "text2"]
-        }
-    }
-    assert get_content_from_path(test_data, ["step1", "content", 0], "step1") == "text1"
-    
-    # Test missing key
-    assert get_content_from_path(test_data, ["step1", "nonexistent"], "step1") is None
-    
-    # Test index out of range
-    assert get_content_from_path(test_data, ["step1", "content", 5], "step1") is None
-    
-    # Test None value
-    test_data["step1"]["content"][0] = None
-    assert get_content_from_path(test_data, ["step1", "content", 0], "step1") == ""
 
-def test_demote_headings():
-    # Test heading demotion
-    input_html = "<h1>Title</h1><h2>Subtitle</h2><h3>Section</h3>"
-    expected = "<h2>Title</h2><h3>Subtitle</h3><h4>Section</h4>"
-    assert demote_headings(input_html) == expected
+def test_markdown_to_html():
+    """Test markdown to HTML conversion."""
+    # Test with content
+    markdown = "# Test Heading\n\nSome content"
+    result = markdown_to_html(markdown)
+    assert result == "<pre># Test Heading\n\nSome content</pre>"
     
-    # Test empty input
-    assert demote_headings("") == ""
+    # Test empty content
+    assert markdown_to_html("") == "<pre></pre>"
     
-    # Test no headings
-    input_html = "<p>Regular text</p>"
-    assert demote_headings(input_html) == input_html
-    
-    # Test h6 remains h6
-    input_html = "<h6>Smallest heading</h6>"
-    assert demote_headings(input_html) == input_html
+    # Test None content
+    assert markdown_to_html(None) == "<pre></pre>"
 
-def test_handler():
-    # Mock Pipedream steps with both Claude and ChatGPT content
-    mock_steps = {
-        "chat1": {
-            "$return_value": {
-                "content": [{"text": "# Claude's Markdown"}]
-            }
-        },
-        "chat": {
-            "$return_value": {
-                "generated_message": {
-                    "content": "# ChatGPT's Markdown"
-                }
-            }
-        }
-    }
+
+def test_combine_html():
+    """Test combining HTML from multiple sources."""
+    # Test with both contents
+    claude_html = "<pre>Claude's content</pre>"
+    chatgpt_html = "<pre>ChatGPT's content</pre>"
+    result = combine_html(claude_html, chatgpt_html)
+    assert result == "<div><pre>Claude's content</pre>\n<pre>ChatGPT's content</pre></div>"
     
-    pd = MockPipedream(mock_steps)
+    # Test with empty content
+    assert combine_html("", "") == "<div>No content available.</div>"
+    
+    # Test with one empty content
+    result = combine_html(claude_html, "")
+    assert result == "<div><pre>Claude's content</pre>\n</div>"
+
+
+@patch("src.integrations.ai_content_processor.datetime")
+def test_handler_success(mock_datetime):
+    """Test successful handler execution."""
+    # Mock datetime
+    mock_datetime.now.return_value = datetime(2024, 3, 20)
+    
+    # Test with both contents
+    pd = MockPipedream({
+        "claude_markdown": "# Claude's content",
+        "chatgpt_markdown": "# ChatGPT's content"
+    })
+    
     result = handler(pd)
     
-    # Test structure of return value
     assert isinstance(result, dict)
-    assert "html_body" in result
-    assert "formatted_date" in result
-    
-    # Test HTML content
-    assert "Claude's Output" in result["html_body"]
-    assert "ChatGPT's Output" in result["html_body"]
-    
-    # Test date formatting
-    today = date.today()
-    expected_date = today.strftime(f"%B {today.day}, %Y")
-    assert result["formatted_date"] == expected_date
+    assert "html" in result
+    assert "today" in result
+    assert result["today"] == "Wednesday, March 20, 2024"
+    assert "Claude's content" in result["html"]
+    assert "ChatGPT's content" in result["html"]
+
 
 def test_handler_empty_content():
-    # Test with empty content
-    mock_steps = {
-        "chat1": {"$return_value": {"content": []}},
-        "chat": {"$return_value": {"generated_message": {"content": ""}}}
-    }
+    """Test handler with empty content."""
+    pd = MockPipedream({
+        "claude_markdown": "",
+        "chatgpt_markdown": ""
+    })
     
-    pd = MockPipedream(mock_steps)
     result = handler(pd)
     
-    assert "(No content from Claude)" in result["html_body"]
-    assert "(No content from ChatGPT)" in result["html_body"]
+    assert isinstance(result, dict)
+    assert "html" in result
+    assert "today" in result
+    assert "<pre></pre>" in result["html"]
 
-def test_handler_missing_steps():
-    # Test with missing steps
-    mock_steps = {}
+
+def test_handler_missing_content():
+    """Test handler with missing content."""
+    pd = MockPipedream({})
     
-    pd = MockPipedream(mock_steps)
     result = handler(pd)
     
-    assert "Error fetching Claude's content" in result["html_body"]
-    assert "Error fetching ChatGPT's content" in result["html_body"] 
+    assert isinstance(result, dict)
+    assert "html" in result
+    assert "today" in result
+    assert "<pre></pre>" in result["html"]

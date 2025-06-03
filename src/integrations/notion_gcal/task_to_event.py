@@ -10,11 +10,13 @@ dictionary containing the formatted data for Google Calendar event creation.
 """
 
 import logging
+
 from src.utils.notion_utils import extract_notion_task_data
 
 # Configure basic logging for Pipedream
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
 
 def handler(pd: "pipedream"):
     """
@@ -34,12 +36,15 @@ def handler(pd: "pipedream"):
     # --- 2. Check conditions and decide action ---
     # Exit if Due Date is missing
     if task_data["due_date_start"] is None:
-        exit_message = f"Due Date is missing -- Skipping task: '{task_data['task_name']}'"
+        exit_message = (
+            f"Due Date is missing -- Skipping task: '{task_data['task_name']}'"
+        )
         logger.info(exit_message)
         pd.flow.exit(exit_message)
         return
 
-    # Exit if it looks like an existing event (should be handled by an update flow)
+    # Exit if it looks like an existing event (should be handled by an update
+    # flow)
     if task_data["event_id"]:
         exit_message = f"Google Event ID exists -- Should be an update, skipping creation for: '{task_data['task_name']}'"
         logger.info(exit_message)
@@ -47,10 +52,15 @@ def handler(pd: "pipedream"):
         return
 
     # --- 3. Prepare data for event creation (if checks above passed) ---
-    logger.info(f"Preparing to create event for task: '{task_data['task_name']}'")
+    logger.info(
+        f"Preparing to create event for task: '{task_data['task_name']}'")
 
     # Use start date as end date if end date is not provided
-    final_end_date = task_data["due_date_end"] if task_data["due_date_end"] is not None else task_data["due_date_start"]
+    final_end_date = (
+        task_data["due_date_end"]
+        if task_data["due_date_end"] is not None
+        else task_data["due_date_start"]
+    )
 
     # Log extracted details
     logger.info(f"Subject: {task_data['task_name']}")
@@ -59,7 +69,8 @@ def handler(pd: "pipedream"):
     logger.info(f"Notion ID: {task_data['notion_id']}")
     logger.info(f"Notion URL: {task_data['url']}")
 
-    # Structure the return object for the next step (e.g., Google Calendar create event)
+    # Structure the return object for the next step (e.g., Google Calendar
+    # create event)
     ret_obj = {
         "GCal": {
             "Subject": task_data["task_name"],
@@ -68,9 +79,9 @@ def handler(pd: "pipedream"):
             "Update": False,  # Explicitly setting as False for clarity
             "NotionId": task_data["notion_id"],
             "Url": task_data["url"],
-            "Description": f"Notion Task: {task_data['task_name']}\nLink: {task_data['url'] or 'N/A'}"
+            "Description": f"Notion Task: {task_data['task_name']}\nLink: {task_data['url'] or 'N/A'}",
         }
     }
 
     # --- 4. Return data for use in subsequent steps ---
-    return ret_obj 
+    return ret_obj

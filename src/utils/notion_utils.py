@@ -6,12 +6,14 @@ including data extraction, formatting, and API request handling.
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Union
-from src.utils.common_utils import safe_get, extract_id_from_url
+from typing import Any, Dict, Optional
+
+from src.utils.common_utils import extract_id_from_url, safe_get
 
 # Configure basic logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
 
 def extract_notion_task_data(trigger_event: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -24,18 +26,24 @@ def extract_notion_task_data(trigger_event: Dict[str, Any]) -> Dict[str, Any]:
         Dictionary containing extracted task data
     """
     properties = safe_get(trigger_event, ["properties"], default={})
-    
+
     # Extract due date
     due_date = safe_get(properties, ["Due Date", "date"], default={})
     due_date_start = safe_get(due_date, ["start"])
     due_date_end = safe_get(due_date, ["end"])
 
     # Extract task name
-    task_name = safe_get(properties, ["Task name", "title", 0, "plain_text"], default="Untitled Task")
+    task_name = safe_get(
+        properties, [
+            "Task name", "title", 0, "plain_text"], default="Untitled Task")
 
     # Extract Google Event ID
-    event_id = safe_get(properties, ["Google Event ID", "rich_text", 0, "plain_text"])
-    if not event_id and isinstance(safe_get(properties, ["Google Event ID", "rich_text"]), list):
+    event_id = safe_get(
+        properties, [
+            "Google Event ID", "rich_text", 0, "plain_text"])
+    if not event_id and isinstance(
+        safe_get(properties, ["Google Event ID", "rich_text"]), list
+    ):
         event_id = safe_get(properties, ["Google Event ID", "rich_text", 0])
 
     # Extract Notion page ID and URL
@@ -48,11 +56,12 @@ def extract_notion_task_data(trigger_event: Dict[str, Any]) -> Dict[str, Any]:
         "task_name": task_name,
         "event_id": event_id,
         "notion_id": notion_id,
-        "url": notion_url
+        "url": notion_url,
     }
 
     logger.info(f"Extracted task data: {task_data}")
     return task_data
+
 
 def format_notion_properties(properties: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -70,31 +79,24 @@ def format_notion_properties(properties: Dict[str, Any]) -> Dict[str, Any]:
             # Handle different property types
             if "title" in value:
                 formatted[key] = {
-                    "title": [{"text": {"content": value["title"]}}]
-                }
+                    "title": [{"text": {"content": value["title"]}}]}
             elif "rich_text" in value:
                 formatted[key] = {
                     "rich_text": [{"text": {"content": value["rich_text"]}}]
                 }
             elif "date" in value:
-                formatted[key] = {
-                    "date": {"start": value["date"]}
-                }
+                formatted[key] = {"date": {"start": value["date"]}}
             elif "select" in value:
-                formatted[key] = {
-                    "select": {"name": value["select"]}
-                }
+                formatted[key] = {"select": {"name": value["select"]}}
             elif "multi_select" in value:
-                formatted[key] = {
-                    "multi_select": [{"name": item} for item in value["multi_select"]]
-                }
+                formatted[key] = {"multi_select": [{"name": item}
+                                                   for item in value["multi_select"]]}
         else:
             # Default to rich text for simple values
-            formatted[key] = {
-                "rich_text": [{"text": {"content": str(value)}}]
-            }
+            formatted[key] = {"rich_text": [{"text": {"content": str(value)}}]}
 
     return formatted
+
 
 def validate_notion_response(response: Dict[str, Any]) -> bool:
     """
@@ -115,10 +117,16 @@ def validate_notion_response(response: Dict[str, Any]) -> bool:
         return False
 
     if response["object"] == "error":
-        logger.error(f"Notion API error: {safe_get(response, ['message'], 'Unknown error')}")
+        logger.error(
+            f"Notion API error: {
+                safe_get(
+                    response,
+                    ['message'],
+                    'Unknown error')}")
         return False
 
     return True
+
 
 def extract_notion_page_id_from_url(url: str) -> Optional[str]:
     """
@@ -130,4 +138,4 @@ def extract_notion_page_id_from_url(url: str) -> Optional[str]:
     Returns:
         The extracted page ID or None if extraction fails
     """
-    return extract_id_from_url(url, pattern=r'[a-f0-9]{32}$') 
+    return extract_id_from_url(url, pattern=r"[a-f0-9]{32}$")
