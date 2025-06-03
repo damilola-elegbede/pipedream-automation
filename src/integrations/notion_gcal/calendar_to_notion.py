@@ -87,7 +87,7 @@ def handler(pd: "pipedream") -> Dict[str, Any]:
     end_time = get_event_time(safe_get(event_data, ["end"], default={}))
 
     # Fallback end time to start time if missing
-    if end_time is None:
+    if end_time is None or end_time == "{}":
         logger.warning("End time is missing. Using start time as fallback.")
         end_time = start_time
 

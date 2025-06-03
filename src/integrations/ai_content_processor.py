@@ -63,7 +63,7 @@ def handler(pd: "pipedream"):
             print("Claude's HTML processing successful.")
         else:
             print("No Claude Markdown content to process.")
-            claude_html_output = "<p><em>(No content from Claude)</em></p>" if not any("Claude" in err for err in error_messages) else ""
+            claude_html_output = "<p><em>(No content from Claude)</em></p>"
 
         if chatgpt_markdown_content:
             print("Converting ChatGPT's Markdown to HTML...")
@@ -73,7 +73,7 @@ def handler(pd: "pipedream"):
             print("ChatGPT's HTML processing successful.")
         else:
             print("No ChatGPT Markdown content to process.")
-            chatgpt_html_output = "<p><em>(No content from ChatGPT)</em></p>" if not any("ChatGPT" in err for err in error_messages) else ""
+            chatgpt_html_output = "<p><em>(No content from ChatGPT)</em></p>"
 
     except Exception as e:
         print(f"Error during Markdown to HTML conversion or heading demotion: {e}")
@@ -86,24 +86,21 @@ def handler(pd: "pipedream"):
     if error_messages:
         combined_html_body += "\n".join(error_messages) + "\n<hr style=\"margin-top:1em; margin-bottom:1em;\">\n"
 
-    has_claude_content_or_error = bool(claude_html_output and claude_html_output != "<p><em>(No content from Claude)</em></p>") or any("Claude" in err for err in error_messages)
-    if has_claude_content_or_error:
+    if claude_html_output:
         combined_html_body += "<h1>Claude's Output</h1>\n"
         combined_html_body += claude_html_output
         combined_html_body += "\n" 
 
-    has_chatgpt_content_or_error = bool(chatgpt_html_output and chatgpt_html_output != "<p><em>(No content from ChatGPT)</em></p>") or any("ChatGPT" in err for err in error_messages)
-    if has_claude_content_or_error and has_chatgpt_content_or_error:
+    if claude_html_output and chatgpt_html_output:
         combined_html_body += "<hr style=\"margin-top:1em; margin-bottom:1em;\">\n"
 
-    if has_chatgpt_content_or_error:
+    if chatgpt_html_output:
         combined_html_body += "<h1>ChatGPT's Output</h1>\n"
         combined_html_body += chatgpt_html_output
         combined_html_body += "\n" 
     
-    if not combined_html_body.strip() or combined_html_body == "<p><em>(No content from Claude)</em></p>\n<hr style=\"margin-top:1em; margin-bottom:1em;\">\n<p><em>(No content from ChatGPT)</em></p>\n":
-        if not error_messages:
-            combined_html_body = "<p><em>(No content from either AI source to display.)</em></p>"
+    if not combined_html_body.strip():
+        combined_html_body = "<p><em>(No content from either AI source to display.)</em></p>"
 
     # --- 4. Get and Format Today's Date ---
     try:

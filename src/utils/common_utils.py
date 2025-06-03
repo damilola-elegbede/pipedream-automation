@@ -73,7 +73,13 @@ def extract_id_from_url(url: str, pattern: str = r'[a-f0-9]{32}') -> Optional[st
         # Find all matches and take the last one (most specific)
         matches = re.findall(pattern, url)
         if matches:
-            return matches[-1]
+            # For custom patterns with $ anchor, we need to check if the match is at the end
+            if pattern.endswith('$'):
+                last_match = matches[-1]
+                if url.endswith(last_match):
+                    return last_match
+            else:
+                return matches[-1]
     except Exception as e:
         logger.error(f"Error extracting ID from URL '{url}': {e}")
     return None 

@@ -40,7 +40,7 @@ def handler(pd: "pipedream"):
         return
 
     # Exit if it looks like an existing event (should be handled by an update flow)
-    if task_data["google_event_id_list"]:
+    if task_data["event_id"]:
         exit_message = f"Google Event ID exists -- Should be an update, skipping creation for: '{task_data['task_name']}'"
         logger.info(exit_message)
         pd.flow.exit(exit_message)
@@ -57,7 +57,7 @@ def handler(pd: "pipedream"):
     logger.info(f"Start: {task_data['due_date_start']}")
     logger.info(f"End: {final_end_date}")
     logger.info(f"Notion ID: {task_data['notion_id']}")
-    logger.info(f"Notion URL: {task_data['notion_url']}")
+    logger.info(f"Notion URL: {task_data['url']}")
 
     # Structure the return object for the next step (e.g., Google Calendar create event)
     ret_obj = {
@@ -67,8 +67,8 @@ def handler(pd: "pipedream"):
             "End": final_end_date,
             "Update": False,  # Explicitly setting as False for clarity
             "NotionId": task_data["notion_id"],
-            "Url": task_data["notion_url"],
-            "Description": f"Notion Task: {task_data['task_name']}\nLink: {task_data['notion_url'] or 'N/A'}"
+            "Url": task_data["url"],
+            "Description": f"Notion Task: {task_data['task_name']}\nLink: {task_data['url'] or 'N/A'}"
         }
     }
 
