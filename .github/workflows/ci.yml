@@ -11,32 +11,22 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.8", "3.12"]  # System Python (3.8) and Latest (3.12)
-        python-name: ["System Python 3.8", "Latest Python 3.12"]
+        python-version: [3.8, 3.12]
 
     steps:
-    - uses: actions/checkout@v3
-      with:
-        fetch-depth: 0  # Fetch all history for better versioning
+    - uses: actions/checkout@v4
     
-    - name: Set up ${{ matrix.python-name }}
-      uses: actions/setup-python@v4
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-        cache: 'pip'  # Enable pip caching
-    
-    - name: Cache pip packages
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
+        cache: 'pip'
     
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip setuptools wheel
+        python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip install pytest pytest-cov
     
     - name: Debug repository structure
       run: |
@@ -64,4 +54,6 @@ jobs:
       uses: codecov/codecov-action@v3
       with:
         file: ./coverage.xml
-        fail_ci_if_error: true 
+        fail_ci_if_error: true
+        token: ${{ secrets.CODECOV_TOKEN }}
+        verbose: true 
