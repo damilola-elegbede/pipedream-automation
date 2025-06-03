@@ -3,7 +3,8 @@ Tests for the Notion Task to Google Calendar Event converter.
 """
 import pytest
 from datetime import datetime, timedelta
-from src.integrations.notion_gcal.task_to_event import safe_get, handler
+from src.utils.common_utils import safe_get
+from src.integrations.notion_gcal.task_to_event import handler
 
 class MockPipedream:
     def __init__(self, steps):

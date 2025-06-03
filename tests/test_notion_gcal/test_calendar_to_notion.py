@@ -7,9 +7,8 @@ and extracts Notion page IDs from their location URLs.
 
 import pytest
 from datetime import datetime, timedelta
+from src.utils.common_utils import safe_get, extract_id_from_url
 from src.integrations.notion_gcal.calendar_to_notion import (
-    safe_get,
-    extract_notion_page_id,
     get_event_time,
     handler
 )
@@ -53,14 +52,14 @@ def test_safe_get():
 def test_extract_notion_page_id():
     """Test the extract_notion_page_id function."""
     # Valid Notion URLs
-    assert extract_notion_page_id("https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef") == "1234567890abcdef1234567890abcdef"
-    assert extract_notion_page_id("https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef?pvs=4") == "1234567890abcdef1234567890abcdef"
+    assert extract_id_from_url("https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef") == "1234567890abcdef1234567890abcdef"
+    assert extract_id_from_url("https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef?pvs=4") == "1234567890abcdef1234567890abcdef"
 
     # Invalid URLs
-    assert extract_notion_page_id("https://www.notion.so/My-Page") is None
-    assert extract_notion_page_id("https://example.com/page-123") is None
-    assert extract_notion_page_id("") is None
-    assert extract_notion_page_id(None) is None
+    assert extract_id_from_url("https://www.notion.so/My-Page") is None
+    assert extract_id_from_url("https://example.com/page-123") is None
+    assert extract_id_from_url("") is None
+    assert extract_id_from_url(None) is None
 
 def test_get_event_time():
     """Test the get_event_time function."""
