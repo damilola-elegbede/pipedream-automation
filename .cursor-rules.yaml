@@ -1,0 +1,33 @@
+# Cursor rules for this Python project
+
+ignore:
+  - venv/
+  - .venv/
+  - env/
+  - __pycache__/
+  - .pytest_cache/
+  - .mypy_cache/
+  - .pyre/
+  - .nox/
+  - .tox/
+  - .idea/
+  - .vscode/
+  - .DS_Store
+  - Thumbs.db
+  - build/
+  - dist/
+  - *.egg-info/
+  - .eggs/
+  - .coverage
+  - .coverage.*
+  - coverage.xml
+  - htmlcov/
+  - .cache
+  - .hypothesis/
+  - debug.log
+  - pip-log.txt
+  - pip-delete-this-directory.txt
+  - last-test-run.txt
+  - setup.cfg
+
+# Optionally, you can add custom rules for code navigation, formatting, or linting here. 

@@ -87,10 +87,11 @@ pytest --cov=src --cov-report=term-missing
 
 ### Test Coverage
 
-The project maintains high test coverage. Coverage reports are:
-- Generated locally using pytest-cov
-- Uploaded to Codecov for pull requests
-- Available in the CI/CD pipeline
+- The project enforces a minimum test coverage threshold of **70%** (see `pytest.ini`).
+- Coverage reports are:
+  - Generated locally using pytest-cov
+  - Uploaded to Codecov for pull requests
+  - Available in the CI/CD pipeline
 
 ## Continuous Integration
 
@@ -170,7 +171,7 @@ This integration automates the process of creating Notion tasks from Gmail email
    - Filters and processes email content
    - Prepares data for Notion task creation
 
-2. **Task Creator** (`create_task.py`)
+2. **Task Creator** (`create_notion_task.py`)
    - Creates Notion tasks from email content
    - Handles HTML content and attachments
    - Links back to original emails
@@ -206,5 +207,11 @@ This integration automates the process of creating Notion tasks from Gmail email
 
 1. Set up a Pipedream workflow with a Gmail trigger
 2. Add the `fetch_emails.py` step to get emails
-3. Configure the `create_task.py` step to create Notion tasks
-4. Add the `label_processed.py` step to manage email labels 
+3. Configure the `create_notion_task.py` step to create Notion tasks
+4. Add the `label_processed.py` step to manage email labels
+
+## Code Quality & Repo Hygiene
+
+- The repository includes a `.gitignore` file to keep out virtual environments, build/test artifacts, and IDE/editor files.
+- A `.cursor-rules.yaml` file is present for best practices with Cursor.
+- Pre-commit hooks are set up for linting and formatting. 
