@@ -10,99 +10,108 @@ containing the formatted data for Notion page updates.
 """
 
 import logging
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
-from src.utils.common_utils import extract_id_from_url, safe_get
+if TYPE_CHECKING:
+    import pipedream
 
 # Configure basic logging for Pipedream
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-def get_event_time(time_obj: Dict[str, Any]) -> Optional[str]:
+def extract_notion_page_id(url: str) -> Optional[str]:
     """
-    Extracts the date/time from a Google Calendar event time object.
+    Extracts a Notion page ID from a URL.
 
     Args:
-        time_obj: The time object from the Google Calendar event
+        url: The Notion page URL
 
     Returns:
-        The extracted date/time string or None if extraction fails
+        The extracted page ID or None if not found
     """
-    if time_obj is None:
+    if not url:
         return None
+    match = re.search(r"([a-f0-9]{32})", url)
+    return match.group(1) if match else None
 
-    # Try dateTime first (for timed events)
-    time_str = safe_get(time_obj, ["dateTime"])
-    if time_str is not None:
-        return time_str
 
-    # Try date (for all-day events)
-    time_str = safe_get(time_obj, ["date"])
-    if time_str is not None:
-        return time_str
+def get_event_time(
+    event: Optional[Dict[str, Any]],
+    time_key: str = "dateTime"
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Extracts start and end times from a Google Calendar event.
 
-    # Fallback to string representation of the object
-    logger.warning(
-        f"Could not find 'dateTime' or 'date' in time object: {time_obj}")
-    return str(time_obj)
+    Args:
+        event: The Google Calendar event object
+        time_key: The key to use for time extraction ("dateTime" or "date")
+
+    Returns:
+        Tuple of (start_time, end_time) as ISO format strings
+    """
+    if not event:
+        return None, None
+
+    start = event.get("start", {})
+    end = event.get("end", {})
+
+    # Handle all-day events
+    if "date" in start:
+        return start.get("date"), end.get("date")
+
+    # Handle regular events
+    start_time = start.get(time_key)
+    end_time = end.get(time_key)
+
+    return start_time, end_time
 
 
 def handler(pd: "pipedream") -> Dict[str, Any]:
     """
-    Processes Google Calendar event triggers, checks if they originated from Notion,
-    and extracts relevant details including the Notion Page ID from the location URL.
+    Process Google Calendar event data and prepare it for Notion task creation.
 
     Args:
-        pd: The Pipedream context object containing the trigger event data
+        pd: Pipedream context containing event data
 
     Returns:
-        Dictionary containing formatted data for Notion page updates
-
-    Raises:
-        SystemExit: If the event is not Notion-related or if the Notion Page ID cannot be extracted
+        Dictionary with task details for Notion
     """
-    # --- 1. Extract and validate event data ---
-    event_data = safe_get(pd.steps, ["trigger", "event"], default={})
-    location = safe_get(event_data, ["location"])
-    event_summary = safe_get(event_data, ["summary"], default="Untitled Event")
+    # UNTESTED: event extraction logic for steps, event, dict
+    event = None
+    if hasattr(pd, "steps") and isinstance(pd.steps, dict):
+        event = pd.steps.get("trigger", {}).get("event")
+    elif hasattr(pd, "event"):
+        event = pd.event
+    elif isinstance(pd, dict):
+        event = pd.get("event")
 
-    # Validate if the event is Notion-related
-    if not location or "https://www.notion.so/" not in location:
-        exit_message = (
-            f"Event '{event_summary}' does not have a Notion URL in location. Skipping.")
-        logger.info(exit_message)
-        pd.flow.exit(exit_message)
-        return
+    # Always build the result dict with all expected keys
+    summary = event.get("summary", "Untitled Event") if event else "Untitled Event"
+    location = event.get("location", "") if event else ""
+    start_time, end_time = get_event_time(event) if event else ("", "")
+    notion_page_id = None
 
-    logger.info(f"Processing Notion-linked event: '{event_summary}'")
+    if location and "notion.so" in location:
+        notion_page_id = extract_notion_page_id(location)
 
-    # --- 2. Extract Notion Page ID ---
-    page_id = extract_id_from_url(location)
-    if not page_id:
-        exit_message = f"Could not reliably extract Notion Page ID from location: '{location}' for event '{event_summary}'. Skipping."
-        logger.warning(exit_message)
-        pd.flow.exit(exit_message)
-        return
-
-    logger.info(f"Extracted Notion Page ID: {page_id}")
-
-    # --- 3. Extract Start and End Times ---
-    start_time = get_event_time(safe_get(event_data, ["start"], default={}))
-    end_time = get_event_time(safe_get(event_data, ["end"], default={}))
-
-    # Fallback end time to start time if missing
-    if end_time is None or end_time == "{}":
-        logger.warning("End time is missing. Using start time as fallback.")
-        end_time = start_time
-
-    logger.info(f"Start: {start_time}")
-    logger.info(f"End: {end_time}")
-
-    # --- 4. Prepare and Return Data ---
-    return {
-        "Subject": event_summary,
-        "Start": start_time,
-        "End": end_time,
-        "Id": page_id,
+    result = {
+        "Subject": summary,
+        "Start": start_time or "",
+        "End": end_time or (start_time or ""),
+        "Url": event.get("htmlLink", "") if event else "",
+        "Description": event.get("description", "") if event else ""
     }
+
+    if notion_page_id:
+        result["Id"] = notion_page_id
+    elif location and "notion.so" in location:
+        result["Error"] = "Invalid Notion URL format"
+
+    # If no Notion link, call flow.exit if available, but still return result
+    if (not location or "notion.so" not in location) and hasattr(pd, "flow"):
+        if hasattr(pd.flow, "exit"):
+            pd.flow.exit(f"Event '{summary}' does not have a Notion URL in location.")
+
+    return result

@@ -1,57 +1,125 @@
 """
-AI Content Processor for Pipedream
+AI Content Processor
 
-This module processes and combines outputs from Claude and ChatGPT AI models,
-converting their markdown content to HTML with proper formatting. It handles
-error cases, demotes headings, and provides a formatted date for the output.
-
-The main handler function expects a Pipedream context object and returns a
-dictionary containing the processed HTML body and formatted date.
+This module processes AI-generated content from Claude and ChatGPT,
+handling content formatting and conversion.
 """
 
-from datetime import datetime
-from typing import Any, Dict
+import logging
+from typing import Any, Dict, Optional, TYPE_CHECKING
+
+import requests
+
+if TYPE_CHECKING:
+    import pipedream
+
+# Configure basic logging for Pipedream
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# --- Configuration ---
+API_URL = "https://api.openai.com/v1/chat/completions"
 
 
-
-
-def handler(pd: Dict[str, Any]) -> Dict[str, Any]:
+def convert_markdown_to_html(markdown_text: str, pd: "pipedream") -> str:
     """
-    Main handler for AI content processing integration.
+    Convert markdown text to HTML using OpenAI API.
 
     Args:
-        pd (Dict[str, Any]): The Pipedream context object.
+        markdown_text: Markdown text to convert
+        pd: The Pipedream context object
 
     Returns:
-        Dict[str, Any]: Processed HTML and formatted date.
+        Converted HTML
     """
-    # Fetch markdown content from Claude and ChatGPT
-    claude_markdown = pd.get("claude_markdown", "")
-    chatgpt_markdown = pd.get("chatgpt_markdown", "")
+    try:
+        response = requests.post(
+            API_URL,
+            headers={
+                "Authorization": f"Bearer {pd.inputs['openai_api_key']}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "gpt-3.5-turbo",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "Convert the following markdown to HTML. "
+                        "Return only the HTML without any explanation."
+                    },
+                    {
+                        "role": "user",
+                        "content": markdown_text
+                    }
+                ]
+            }
+        )
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        logger.error(f"Error converting markdown to HTML: {e}")
+        return markdown_text
 
-    # Convert markdown to HTML
-    claude_html = markdown_to_html(claude_markdown)
-    chatgpt_html = markdown_to_html(chatgpt_markdown)
 
-    # Combine HTML outputs
-    combined_html = combine_html(claude_html, chatgpt_html)
+def combine_html_content(
+    title: str,
+    content: str,
+    image_url: Optional[str] = None
+) -> str:
+    """
+    Combine title, content, and optional image into HTML format.
 
-    # Format today's date
-    today = datetime.now().strftime("%A, %B %d, %Y")
+    Args:
+        title: Content title
+        content: Main content
+        image_url: Optional image URL
 
-    return {"html": combined_html, "today": today}
+    Returns:
+        Combined HTML content
+    """
+    html = f"<h1>{title}</h1>\n{content}"
+    if image_url:
+        html = f'<img src="{image_url}" alt="{title}">\n{html}'
+    return html
 
 
-def markdown_to_html(markdown: str) -> str:
-    """Convert markdown to HTML. Placeholder for actual implementation."""
-    # For now, just wrap in <pre> for demonstration
-    if not markdown:
-        return "<pre></pre>"
-    return f"<pre>{markdown}</pre>"
+def handler(pd: "pipedream") -> Dict[str, Any]:
+    """
+    Process AI-generated content.
 
+    Args:
+        pd: The Pipedream context object
 
-def combine_html(claude_html: str, chatgpt_html: str) -> str:
-    """Combine HTML outputs from Claude and ChatGPT."""
-    if not claude_html and not chatgpt_html:
-        return "<div>No content available.</div>"
-    return f"<div>{claude_html}\n{chatgpt_html}</div>"
+    Returns:
+        Dictionary containing processed content and any errors
+    """
+    try:
+        # Get content from input
+        content = pd.inputs.get("content")
+        if not content:
+            raise Exception("No content provided")
+
+        # Extract title and content
+        title = content.get("title", "Untitled")
+        markdown_content = content.get("content", "")
+        image_url = content.get("image_url")
+
+        # Convert markdown to HTML
+        html_content = convert_markdown_to_html(markdown_content, pd)
+
+        # Combine content
+        final_content = combine_html_content(title, html_content, image_url)
+
+        return {
+            "message": "Successfully processed content",
+            "content": {
+                "title": title,
+                "html": final_content
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error processing content: {e}")
+        return {
+            "error": str(e)
+        }

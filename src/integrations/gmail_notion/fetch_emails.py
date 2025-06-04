@@ -9,126 +9,238 @@ The main handler function expects a Pipedream context object and returns a list
 of email details including headers, body content, and metadata.
 """
 
-import base64
 import logging
-import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import requests
+from requests.exceptions import HTTPError, RequestException
 
 from src.utils.common_utils import safe_get
+
+if TYPE_CHECKING:
+    import pipedream
 
 # Configure basic logging for Pipedream
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+# --- Configuration ---
+GMAIL_API_BASE_URL = "https://gmail.googleapis.com/gmail/v1/users/me"
+GMAIL_MESSAGES_URL = f"{GMAIL_API_BASE_URL}/messages"
+GMAIL_THREADS_URL = f"{GMAIL_API_BASE_URL}/threads"
+MAX_RESULTS = 10
 
-def get_header_value(headers: List[Dict[str, str]],
-                     name: str) -> Optional[str]:
+
+def get_header_value(headers: List[Dict[str, str]], name: str) -> Optional[str]:
+    """
+    Extracts a header value from a list of email headers.
+
+    Args:
+        headers: List of header dictionaries containing name-value pairs
+        name: Name of the header to find (case-insensitive)
+
+    Returns:
+        Header value if found, None otherwise
+    """
+    if not headers:
+        return None
+
+    name_lower = name.lower()
     for header in headers:
-        if safe_get(header, "name", "").lower() == name.lower():
-            return safe_get(header, "value")
+        if header.get("name", "").lower() == name_lower:
+            return header.get("value")
+
     return None
 
 
-def get_body_parts(parts: List[Dict[str, Any]]) -> Dict[str, str]:
-    result = {"text": "", "html": ""}
-    for part in parts:
-        mime_type = safe_get(part, ["mimeType"])
-        if mime_type == "text/plain":
-            data = safe_get(part, ["body", "data"])
-            if data:
-                result["text"] = base64.urlsafe_b64decode(data).decode()
-        elif mime_type == "text/html":
-            data = safe_get(part, ["body", "data"])
-            if data:
-                result["html"] = base64.urlsafe_b64decode(data).decode()
-        elif safe_get(part, ["parts"]):
-            nested_result = get_body_parts(safe_get(part, ["parts"], []))
-            result["text"] += nested_result["text"]
-            result["html"] += nested_result["html"]
-    return result
+def process_message_part(
+    part: Dict[str, Any],
+    plain_text: Optional[str],
+    html_content: Optional[str]
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Process a single message part to extract text content.
+
+    Args:
+        part: Message part data
+        plain_text: Current plain text content
+        html_content: Current HTML content
+
+    Returns:
+        Tuple of (plain_text, html_content)
+    """
+    mime_type = part.get("mimeType", "").lower()
+    data = None
+
+    if "body" in part and isinstance(part["body"], dict):
+        data = part["body"].get("data")
+    elif "data" in part:
+        data = part["data"]
+
+    if mime_type == "text/plain" and not plain_text:
+        plain_text = data
+    elif mime_type == "text/html" and not html_content:
+        html_content = data
+    elif "parts" in part:
+        for subpart in part["parts"]:
+            plain_text, html_content = process_message_part(
+                subpart,
+                plain_text,
+                html_content
+            )
+
+    return plain_text, html_content
+
+
+def get_body_parts(message: Dict[str, Any]) -> Tuple[str, str]:
+    """
+    Extracts plain text and HTML content from an email message.
+
+    Args:
+        message: The email message data containing payload and parts
+
+    Returns:
+        Tuple of (plain_text, html_content), with empty strings as defaults
+    """
+    plain_text = None
+    html_content = None
+
+    if message and "payload" in message:
+        plain_text, html_content = process_message_part(
+            message["payload"],
+            plain_text,
+            html_content
+        )
+
+    return plain_text or "", html_content or ""
+
+
+def fetch_messages(token: str) -> List[Dict[str, Any]]:
+    """
+    Fetch list of messages from Gmail API.
+
+    Args:
+        token: Gmail OAuth access token
+
+    Returns:
+        List of message metadata
+    """
+    try:
+        response = requests.get(
+            f"{GMAIL_API_BASE_URL}/messages?maxResults={MAX_RESULTS}",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        response.raise_for_status()
+        return response.json().get("messages", [])
+
+    except RequestException as e:
+        logger.error(f"Error fetching messages: {e}")
+        return []
+
+
+def fetch_message_details(token: str, message_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch detailed message data from Gmail API.
+
+    Args:
+        token: Gmail OAuth access token
+        message_id: ID of the message to fetch
+
+    Returns:
+        Message data if successful, None otherwise
+    """
+    try:
+        response = requests.get(
+            f"{GMAIL_API_BASE_URL}/messages/{message_id}",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        response.raise_for_status()
+        return response.json()
+
+    except RequestException as e:
+        logger.error(f"Error fetching message {message_id}: {e}")
+        return None
+
+
+def process_message(
+    token: str,
+    message: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """
+    Process a single message and extract relevant data.
+
+    Args:
+        token: Gmail OAuth access token
+        message: Message metadata
+
+    Returns:
+        Processed message data if successful, None otherwise
+    """
+    try:
+        msg_id = message["id"]
+        msg_data = fetch_message_details(token, msg_id)
+        if not msg_data:
+            return None
+
+        headers_list = msg_data.get("payload", {}).get("headers", [])
+        subject = get_header_value(headers_list, "Subject") or "No Subject"
+        sender = get_header_value(headers_list, "From") or "Unknown Sender"
+        receiver = get_header_value(headers_list, "To") or "Unknown Receiver"
+
+        plain_text, html_content = get_body_parts(msg_data)
+
+        return {
+            "message_id": msg_id,
+            "subject": subject,
+            "sender": sender,
+            "receiver": receiver,
+            "plain_text_body": plain_text,
+            "html_body": html_content,
+            "url": f"https://mail.google.com/mail/u/0/#inbox/{msg_id}"
+        }
+
+    except Exception as e:
+        logger.error(f"Error processing message {message.get('id')}: {e}")
+        return None
 
 
 def handler(pd: "pipedream") -> List[Dict[str, Any]]:
     """
-    Processes Gmail messages based on specified labels and extracts their content.
+    Fetches emails from Gmail and prepares them for processing.
 
     Args:
-        pd: The Pipedream context object containing authentication and inputs
+        pd: The Pipedream context object containing authentication
 
     Returns:
-        List of dictionaries containing email details including headers and content
-
-    Raises:
-        Exception: If Gmail account is not connected or authentication fails
+        List of processed email data
     """
-    access_token = safe_get(pd.steps, ["oauth", "access_token"])
-    if not access_token:
-        logger.error("No access token found in Pipedream context")
+    try:
+        token = safe_get(pd.inputs, ["gmail", "$auth", "oauth_access_token"])
+        if not token:
+            raise Exception(
+                "Gmail account not connected or input name is not 'gmail'. "
+                "Please connect a Gmail account."
+            )
+
+        query = pd.inputs.get("query", "in:inbox")
+        max_results = pd.inputs.get("max_results", 10)
+
+        response = requests.get(
+            GMAIL_MESSAGES_URL,
+            headers={"Authorization": f"Bearer {token}"},
+            params={"q": query, "maxResults": max_results}
+        )
+        response.raise_for_status()
+        messages_data = response.json()
+
+        processed_emails = []
+        for message in messages_data.get("messages", []):
+            processed = process_message(token, message)
+            if processed:
+                processed_emails.append(processed)
+
+        return processed_emails
+
+    except Exception as e:
+        logger.error(f"Error fetching emails: {e}")
         return []
-    required_labels = ["INBOX", "UNREAD"]
-    excluded_labels = ["SENT", "DRAFT", "SPAM", "TRASH"]
-    search_query = " ".join(
-        [f"label:{label}" for label in required_labels]
-        + [f"-label:{label}" for label in excluded_labels]
-    )
-    message_ids = []
-    page_token = None
-    while True:
-        try:
-            list_url = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
-            params = {"q": search_query, "maxResults": 100}
-            if page_token:
-                params["pageToken"] = page_token
-            response = requests.get(
-                list_url,
-                headers={"Authorization": f"Bearer {access_token}"},
-                params=params,
-            )
-            response.raise_for_status()
-            data = response.json()
-            messages = safe_get(data, ["messages"], [])
-            message_ids.extend([msg["id"] for msg in messages])
-            page_token = safe_get(data, ["nextPageToken"])
-            if not page_token:
-                break
-            time.sleep(0.1)
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error fetching message list: {e}")
-            break
-    email_details = []
-    for msg_id in message_ids:
-        try:
-            msg_url = (
-                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}")
-            response = requests.get(
-                msg_url, headers={"Authorization": f"Bearer {access_token}"}
-            )
-            response.raise_for_status()
-            message = response.json()
-            headers = safe_get(message, ["payload", "headers"], [])
-            subject = get_header_value(headers, "Subject") or "No Subject"
-            from_addr = get_header_value(headers, "From") or "Unknown Sender"
-            to_addr = get_header_value(headers, "To") or "Unknown Recipient"
-            date = get_header_value(headers, "Date") or "Unknown Date"
-            body_parts = get_body_parts([safe_get(message, ["payload"], {})])
-            gmail_url = f"https://mail.google.com/mail/u/0/#inbox/{msg_id}"
-            email_details.append(
-                {
-                    "id": msg_id,
-                    "subject": subject,
-                    "from": from_addr,
-                    "to": to_addr,
-                    "date": date,
-                    "text_content": body_parts["text"],
-                    "html_content": body_parts["html"],
-                    "url": gmail_url,
-                }
-            )
-            time.sleep(0.1)
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error fetching message {msg_id}: {e}")
-            continue
-    logger.info(f"Found {len(email_details)} matching emails")
-    return email_details

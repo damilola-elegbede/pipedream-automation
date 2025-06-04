@@ -7,7 +7,6 @@ and prepares data for updating corresponding Google Calendar events.
 
 from datetime import datetime, timedelta
 
-
 from src.integrations.notion_gcal.update_handler import handler, safe_get
 
 

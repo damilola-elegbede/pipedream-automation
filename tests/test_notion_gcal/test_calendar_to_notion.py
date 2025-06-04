@@ -7,8 +7,10 @@ and extracts Notion page IDs from their location URLs.
 
 from datetime import datetime, timedelta
 
-
-from src.integrations.notion_gcal.calendar_to_notion import get_event_time, handler
+from src.integrations.notion_gcal.calendar_to_notion import (
+    get_event_time,
+    handler,
+)
 from src.utils.common_utils import extract_id_from_url, safe_get
 
 
@@ -54,14 +56,16 @@ def test_safe_get():
 
 
 def test_extract_notion_page_id():
-    """Test the extract_notion_page_id function."""
-    # Valid Notion URLs
+    """Test extracting Notion page ID from various formats."""
+    # Test with valid Notion URL
     assert (
         extract_id_from_url(
             "https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef"
         )
         == "1234567890abcdef1234567890abcdef"
     )
+
+    # Test with URL containing query parameters
     assert (
         extract_id_from_url(
             "https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef?pvs=4"
@@ -69,29 +73,44 @@ def test_extract_notion_page_id():
         == "1234567890abcdef1234567890abcdef"
     )
 
-    # Invalid URLs
+    # Test with invalid URLs
     assert extract_id_from_url("https://www.notion.so/My-Page") is None
-    assert extract_id_from_url("https://example.com/page-123") is None
+    assert extract_id_from_url("https://www.notion.so/") is None
     assert extract_id_from_url("") is None
     assert extract_id_from_url(None) is None
 
 
 def test_get_event_time():
-    """Test the get_event_time function."""
-    # Test dateTime format
-    time_obj = {"dateTime": "2024-03-20T10:00:00Z"}
-    assert get_event_time(time_obj) == "2024-03-20T10:00:00Z"
+    """Test extracting event time from various formats."""
+    # Test with start and end time
+    event = {
+        "start": {"dateTime": "2024-01-01T10:00:00Z"},
+        "end": {"dateTime": "2024-01-01T11:00:00Z"},
+    }
+    start_time, end_time = get_event_time(event)
+    assert start_time == "2024-01-01T10:00:00Z"
+    assert end_time == "2024-01-01T11:00:00Z"
 
-    # Test date format (all-day event)
-    time_obj = {"date": "2024-03-20"}
-    assert get_event_time(time_obj) == "2024-03-20"
+    # Test with all-day event
+    event = {
+        "start": {"date": "2024-01-01"},
+        "end": {"date": "2024-01-02"},
+    }
+    start_time, end_time = get_event_time(event)
+    assert start_time == "2024-01-01"
+    assert end_time == "2024-01-02"
 
-    # Test missing time
-    time_obj = {}
-    assert get_event_time(time_obj) == "{}"
+    # Test with missing end time
+    event = {
+        "start": {"dateTime": "2024-01-01T10:00:00Z"},
+    }
+    start_time, end_time = get_event_time(event)
+    assert start_time == "2024-01-01T10:00:00Z"
+    assert end_time is None
 
-    # Test invalid object
-    assert get_event_time(None) is None
+    # Test with invalid event
+    assert get_event_time({}) == (None, None)
+    assert get_event_time(None) == (None, None)
 
 
 def test_handler_valid_event():
@@ -103,10 +122,8 @@ def test_handler_valid_event():
     trigger_data = {
         "summary": "Test Event",
         "location": "https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef",
-        "start": {
-            "dateTime": tomorrow},
-        "end": {
-            "dateTime": day_after},
+        "start": {"dateTime": tomorrow},
+        "end": {"dateTime": day_after},
     }
 
     pd = MockPipedream(trigger_data)
@@ -155,10 +172,8 @@ def test_handler_all_day_event():
     trigger_data = {
         "summary": "Test Event",
         "location": "https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef",
-        "start": {
-            "date": "2024-03-20"},
-        "end": {
-            "date": "2024-03-21"},
+        "start": {"date": "2024-03-20"},
+        "end": {"date": "2024-03-21"},
     }
 
     pd = MockPipedream(trigger_data)
@@ -173,8 +188,7 @@ def test_handler_missing_end_time():
     trigger_data = {
         "summary": "Test Event",
         "location": "https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef",
-        "start": {
-            "dateTime": "2024-03-20T10:00:00Z"},
+        "start": {"dateTime": "2024-03-20T10:00:00Z"},
     }
 
     pd = MockPipedream(trigger_data)
@@ -183,3 +197,192 @@ def test_handler_missing_end_time():
     assert result["Start"] == "2024-03-20T10:00:00Z"
     # Should fallback to start time
     assert result["End"] == "2024-03-20T10:00:00Z"
+
+
+def test_handler_empty_event():
+    """Test handler with empty event data."""
+    pd = MockPipedream({})
+    result = handler(pd)
+
+    assert result["Subject"] == "Untitled Event"
+    assert result["Start"] == ""
+    assert result["End"] == ""
+    assert result["Url"] == ""
+    assert result["Description"] == ""
+    assert "Id" not in result
+
+
+def test_handler_dict_input():
+    """Test handler with dictionary input instead of Pipedream object."""
+    event_data = {
+        "summary": "Test Event",
+        "location": "https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef",
+        "start": {"dateTime": "2024-03-20T10:00:00Z"},
+        "end": {"dateTime": "2024-03-20T11:00:00Z"},
+        "htmlLink": "https://calendar.google.com/event",
+        "description": "Test description"
+    }
+
+    result = handler({"event": event_data})
+
+    assert result["Subject"] == "Test Event"
+    assert result["Start"] == "2024-03-20T10:00:00Z"
+    assert result["End"] == "2024-03-20T11:00:00Z"
+    assert result["Url"] == "https://calendar.google.com/event"
+    assert result["Description"] == "Test description"
+    assert result["Id"] == "1234567890abcdef1234567890abcdef"
+
+
+def test_handler_direct_event():
+    """Test handler with direct event attribute."""
+    class DirectEventPipedream:
+        def __init__(self, event_data):
+            self.event = event_data
+            self.flow = MockFlow()
+
+    event_data = {
+        "summary": "Test Event",
+        "location": "https://www.notion.so/My-Page-1234567890abcdef1234567890abcdef",
+        "start": {"dateTime": "2024-03-20T10:00:00Z"},
+        "end": {"dateTime": "2024-03-20T11:00:00Z"}
+    }
+
+    pd = DirectEventPipedream(event_data)
+    result = handler(pd)
+
+    assert result["Subject"] == "Test Event"
+    assert result["Start"] == "2024-03-20T10:00:00Z"
+    assert result["End"] == "2024-03-20T11:00:00Z"
+    assert result["Id"] == "1234567890abcdef1234567890abcdef"
+
+
+def test_handler_invalid_notion_url():
+    pd = MockPipedream()
+    pd.event = {"summary": "Test Event", "location": "https://notion.so/invalid"}
+    pd.steps = {"trigger": {"event": pd.event}}
+    result = handler(pd)
+    assert result["Subject"] == "Test Event"
+    assert "Error" in result
+    assert result["Error"] == "Invalid Notion URL format"
+
+
+def test_get_event_time_invalid_format():
+    """Test get_event_time with invalid time format."""
+    event = {
+        "start": {"invalid": "2024-01-01T10:00:00Z"},
+        "end": {"invalid": "2024-01-01T11:00:00Z"}
+    }
+
+    start_time, end_time = get_event_time(event)
+    assert start_time is None
+    assert end_time is None
+
+
+def test_get_event_time_mixed_formats():
+    """Test get_event_time with mixed date and dateTime formats."""
+    event = {
+        "start": {"date": "2024-01-01"},
+        "end": {"dateTime": "2024-01-01T11:00:00Z"}
+    }
+
+    start_time, end_time = get_event_time(event)
+    assert start_time == "2024-01-01"
+    assert end_time is None
+
+
+def test_handler_missing_event():
+    pd = MockPipedream()
+    result = handler(pd)
+    assert result["Subject"] == "Untitled Event"
+    assert result["Start"] == ""
+    assert result["End"] == ""
+    assert result["Url"] == ""
+    assert result["Description"] == ""
+
+
+def test_handler_steps_dict_input():
+    class StepsObj:
+        def __init__(self, event):
+            self.steps = {"trigger": {"event": event}}
+            self.flow = MockFlow()
+    event = {"summary": "Steps Event", "location": "https://www.notion.so/Page-1234567890abcdef1234567890abcdef"}
+    pd = StepsObj(event)
+    result = handler(pd)
+    assert result["Subject"] == "Steps Event"
+    assert result["Id"] == "1234567890abcdef1234567890abcdef"
+
+
+def test_handler_event_attr_only():
+    class EventObj:
+        def __init__(self, event):
+            self.event = event
+            self.flow = MockFlow()
+    event = {"summary": "Attr Event", "location": "https://www.notion.so/Page-1234567890abcdef1234567890abcdef"}
+    pd = EventObj(event)
+    result = handler(pd)
+    assert result["Subject"] == "Attr Event"
+    assert result["Id"] == "1234567890abcdef1234567890abcdef"
+
+
+def test_handler_no_event_or_steps():
+    class EmptyObj:
+        def __init__(self):
+            self.flow = MockFlow()
+    pd = EmptyObj()
+    result = handler(pd)
+    assert result["Subject"] == "Untitled Event"
+    assert result["Start"] == ""
+    assert result["End"] == ""
+    assert result["Url"] == ""
+    assert result["Description"] == ""
+
+
+def test_handler_flow_exit_on_non_notion_location():
+    class FlowExitObj:
+        def __init__(self):
+            self.steps = {"trigger": {"event": {"summary": "No Notion", "location": "https://example.com"}}}
+            self.flow = MockFlow()
+    pd = FlowExitObj()
+    handler(pd)
+    assert pd.flow.exit_called
+    assert "does not have a Notion URL" in pd.flow.exit_message
+
+
+def test_handler_flow_exit_on_missing_location():
+    class FlowExitObj:
+        def __init__(self):
+            self.steps = {"trigger": {"event": {"summary": "No Location"}}}
+            self.flow = MockFlow()
+    pd = FlowExitObj()
+    handler(pd)
+    assert pd.flow.exit_called
+    assert "does not have a Notion URL" in pd.flow.exit_message
+
+
+def test_handler_dict_input_event():
+    event = {"summary": "Dict Event", "location": "https://www.notion.so/Page-1234567890abcdef1234567890abcdef"}
+    pd = {"event": event}
+    result = handler(pd)
+    assert result["Subject"] == "Dict Event"
+    assert result["Id"] == "1234567890abcdef1234567890abcdef"
+
+
+def test_handler_object_no_steps_no_event():
+    class NoStepsNoEvent:
+        pass
+    pd = NoStepsNoEvent()
+    result = handler(pd)
+    assert result["Subject"] == "Untitled Event"
+    assert result["Start"] == ""
+    assert result["End"] == ""
+    assert result["Url"] == ""
+    assert result["Description"] == ""
+
+
+def test_handler_invalid_notion_url_error():
+    event = {"summary": "Invalid Notion", "location": "https://www.notion.so/invalid"}
+    pd = {"event": event}
+    result = handler(pd)
+    assert result["Subject"] == "Invalid Notion"
+    assert "Error" in result
+    assert result["Error"] == "Invalid Notion URL format"

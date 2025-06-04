@@ -10,78 +10,187 @@ dictionary containing the formatted data for Google Calendar event creation.
 """
 
 import logging
+from typing import Any, Dict, Optional, TYPE_CHECKING
+import requests
+from requests.exceptions import RequestException
+
+if TYPE_CHECKING:
+    import pipedream
 
 from src.utils.notion_utils import extract_notion_task_data
+from src.utils.common_utils import safe_get
 
 # Configure basic logging for Pipedream
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-def handler(pd: "pipedream"):
+def validate_task_data(task: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Processes Notion task data from a Pipedream trigger, ensuring safe access
-    to potentially missing data paths and handling create/update logic.
+    Validate task data and extract required fields.
 
     Args:
-        pd (pipedream): The Pipedream context object containing the trigger event
+        task: The Notion task data to validate
 
     Returns:
-        dict: A dictionary containing the formatted data for Google Calendar event creation
+        Dictionary containing validation result and extracted data
     """
-    # --- 1. Extract data using the utility function ---
-    trigger_event = pd.steps.get("trigger", {}).get("event", {})
-    task_data = extract_notion_task_data(trigger_event)
+    if not task:
+        return {"error": "No task data provided"}
 
-    # --- 2. Check conditions and decide action ---
-    # Exit if Due Date is missing
-    if task_data["due_date_start"] is None:
-        exit_message = (
-            f"Due Date is missing -- Skipping task: '{task_data['task_name']}'"
-        )
-        logger.info(exit_message)
-        pd.flow.exit(exit_message)
-        return
+    properties = task.get("properties", {})
+    if not isinstance(properties, dict):
+        return {"error": "Task properties must be a dict"}
 
-    # Exit if it looks like an existing event (should be handled by an update
-    # flow)
-    if task_data["event_id"]:
-        exit_message = f"Google Event ID exists -- Should be an update, skipping creation for: '{task_data['task_name']}'"
-        logger.info(exit_message)
-        pd.flow.exit(exit_message)
-        return
+    title_data = properties.get("Name", {}).get("title", [])
+    if not isinstance(title_data, list) or not title_data:
+        return {"error": "Task has no title"}
 
-    # --- 3. Prepare data for event creation (if checks above passed) ---
-    logger.info(
-        f"Preparing to create event for task: '{task_data['task_name']}'")
-
-    # Use start date as end date if end date is not provided
-    final_end_date = (
-        task_data["due_date_end"]
-        if task_data["due_date_end"] is not None
-        else task_data["due_date_start"]
+    title = (
+        title_data[0].get("text", {}).get("content", "Untitled Task")
+        if isinstance(title_data[0], dict)
+        else "Untitled Task"
     )
 
-    # Log extracted details
-    logger.info(f"Subject: {task_data['task_name']}")
-    logger.info(f"Start: {task_data['due_date_start']}")
-    logger.info(f"End: {final_end_date}")
-    logger.info(f"Notion ID: {task_data['notion_id']}")
-    logger.info(f"Notion URL: {task_data['url']}")
+    due_date_field = properties.get("Due date", {}).get("date", {})
+    if not isinstance(due_date_field, dict):
+        return {"error": "Task has no due date"}
 
-    # Structure the return object for the next step (e.g., Google Calendar
-    # create event)
-    ret_obj = {
-        "GCal": {
-            "Subject": task_data["task_name"],
-            "Start": task_data["due_date_start"],
-            "End": final_end_date,
-            "Update": False,  # Explicitly setting as False for clarity
-            "NotionId": task_data["notion_id"],
-            "Url": task_data["url"],
-            "Description": f"Notion Task: {task_data['task_name']}\nLink: {task_data['url'] or 'N/A'}",
+    due_date = due_date_field.get("start")
+    if not due_date:
+        return {"error": "Task has no due date"}
+
+    description_data = properties.get("Description", {}).get("rich_text", [])
+    description = (
+        description_data[0].get("text", {}).get("content")
+        if isinstance(description_data, list) and description_data
+        else ""
+    )
+
+    location_data = properties.get("Location", {}).get("rich_text", [])
+    location = (
+        location_data[0].get("text", {}).get("content")
+        if isinstance(location_data, list) and location_data
+        else ""
+    )
+
+    event_id = None
+    event_id_data = properties.get("Event ID", {}).get("rich_text", [])
+    if isinstance(event_id_data, list) and event_id_data:
+        event_id = event_id_data[0].get("text", {}).get("content")
+
+    return {
+        "success": {
+            "title": title,
+            "due_date": due_date,
+            "description": description,
+            "location": location,
+            "event_id": event_id,
+            "task_url": task.get("url", "")
         }
     }
 
-    # --- 4. Return data for use in subsequent steps ---
-    return ret_obj
+
+def create_calendar_event(
+    event_data: Dict[str, Any],
+    calendar_id: str,
+    calendar_auth: str,
+    event_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Create or update a Google Calendar event.
+
+    Args:
+        event_data: The event data to create/update
+        calendar_id: The Google Calendar ID
+        calendar_auth: The Google Calendar authentication token
+        event_id: Optional event ID for updates
+
+    Returns:
+        Dictionary containing the API response or error
+    """
+    url = (
+        f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events"
+        if not event_id
+        else f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events/{event_id}"
+    )
+
+    try:
+        response = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {calendar_auth}",
+                "Content-Type": "application/json",
+            },
+            json=event_data,
+        )
+        response.raise_for_status()
+        return {"success": response.json()}
+    except RequestException as e:
+        error_msg = str(e)
+        if "401" in error_msg:
+            return {"error": "Invalid calendar authentication"}
+        elif "404" in error_msg:
+            return {"error": "Calendar not found"}
+        else:
+            return {"error": error_msg}
+
+
+def handler(pd: "pipedream") -> Dict[str, Any]:
+    """
+    Process Notion task data and prepare it for Google Calendar event creation.
+
+    Args:
+        pd: Pipedream context containing task data and authentication
+
+    Returns:
+        Dictionary with success and error information
+    """
+    # Validate required inputs
+    task = pd.get("task")
+    if not task:
+        return {"error": "No task data provided"}
+
+    calendar_auth = pd.get("calendar_auth")
+    if not calendar_auth:
+        return {"error": "Missing calendar authentication"}
+
+    calendar_id = pd.get("calendar_id")
+    if not calendar_id:
+        return {"error": "Missing calendar ID"}
+
+    # Validate and extract task data
+    task_validation = validate_task_data(task)
+    if "error" in task_validation:
+        return task_validation
+
+    task_data = task_validation["success"]
+
+    # Prepare event data
+    event = {
+        "summary": task_data["title"],
+        "description": task_data["description"],
+        "location": task_data["location"],
+        "start": {"dateTime": task_data["due_date"]},
+        "end": {"dateTime": task_data["due_date"]},
+    }
+
+    # Create or update event
+    result = create_calendar_event(
+        event,
+        calendar_id,
+        calendar_auth,
+        task_data["event_id"]
+    )
+
+    if "error" in result:
+        return result
+
+    event_data = result["success"]
+    return {
+        "success": {
+            "event_id": event_data["id"],
+            "event_url": event_data["htmlLink"],
+            "task_url": task_data["task_url"]
+        }
+    }

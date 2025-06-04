@@ -1,560 +1,254 @@
 """
-Notion Task Creator from Gmail Emails
+Gmail to Notion Task Creator
 
-This module creates Notion tasks from Gmail emails, including rendering HTML content
-as images and formatting the task content appropriately. It handles authentication,
+This module creates Notion tasks from Gmail emails, handling authentication,
 task creation, and content formatting for the Notion API.
-
-The main handler function expects a Pipedream context object and returns a summary
-of created tasks and any errors encountered.
 """
 
-import json
 import logging
-import re
-import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import requests
+from requests.exceptions import HTTPError, RequestException
 
 from src.utils.common_utils import safe_get
+
+if TYPE_CHECKING:
+    import pipedream
 
 # Configure basic logging for Pipedream
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # --- Configuration ---
-PREVIOUS_STEP_NAME = "gmail"
-NOTION_DATABASE_ID = "89415419-8870-4e82-badf-4598390dcfd4"
-NOTION_API_VERSION = "2022-06-28"
-MAX_CODE_BLOCK_LENGTH = (
-    2000  # Notion's limit for a single rich text object in a code block
-)
-
-# HTML/CSS to Image API Endpoint
-HCTI_API_ENDPOINT = "https://hcti.io/v1/image"
+NOTION_API_BASE_URL = "https://api.notion.com/v1"
+NOTION_PAGES_URL = f"{NOTION_API_BASE_URL}/pages"
+NOTION_BLOCKS_URL = f"{NOTION_API_BASE_URL}/blocks"
 
 
-def extract_email(email_string: Optional[str]) -> Optional[str]:
+def extract_email(text: str) -> Optional[str]:
     """
-    Extracts the email address from a string potentially containing a name.
+    Extract email address from a string.
 
     Args:
-        email_string: String containing an email address, possibly with a name
+        text: String containing an email address
 
     Returns:
-        Extracted email address or None if no valid email found
+        Extracted email address or None if not found
     """
-    if not email_string:
+    if not text:
         return None
-    match = re.search(r"<([^>]+)>", email_string)
-    if match:
-        return match.group(1)
-    if "@" in email_string and "." in email_string.split("@")[-1]:
-        potential_email = email_string.split()[-1]
-        if "@" in potential_email:
-            return potential_email.strip("<>")
-    if "@" in email_string:
-        return email_string.strip()
-    return None
+    return text.strip()
 
 
-def build_notion_properties(email_data: Dict[str, Any]) -> Dict[str, Any]:
+def build_notion_properties(
+    title: str,
+    email: Optional[str] = None,
+    due_date: Optional[str] = None
+) -> Dict[str, Any]:
     """
-    Constructs the 'properties' dictionary for the Notion API request.
+    Build Notion properties dictionary for task creation.
 
     Args:
-        email_data: Dictionary containing email details
+        title: Task title
+        email: Optional email address
+        due_date: Optional due date
 
     Returns:
-        Dictionary of Notion properties for task creation
+        Dictionary of Notion properties
     """
-    properties = {}
-    subject = safe_get(email_data, ["subject"], "No Subject")
-    properties["Task name"] = {
-        "title": [{"type": "text", "text": {"content": subject}}]
+    properties = {
+        "Name": {
+            "title": [
+                {
+                    "text": {
+                        "content": title
+                    }
+                }
+            ]
+        }
     }
 
-    url = safe_get(email_data, ["url"])
-    if url:
-        properties["Original Email Link"] = {"url": url}
-    else:
-        logger.warning(f"Warning: Missing 'url' for subject: {subject}")
+    if email:
+        properties["Email"] = {
+            "email": email
+        }
 
-    sender_raw = safe_get(email_data, ["sender"])
-    sender_email = extract_email(sender_raw)
-    if sender_email:
-        properties["Sender"] = {"email": sender_email}
-    else:
-        logger.warning(
-            f"Warning: Could not extract valid email from 'sender' for subject: {subject} (Raw: {sender_raw})")
+    if due_date:
+        properties["Due Date"] = {
+            "date": {
+                "start": due_date
+            }
+        }
 
-    receiver_raw = safe_get(email_data, ["receiver"])
-    receiver_email = extract_email(
-        receiver_raw.split(",")[0]) if receiver_raw else None
-    if receiver_email:
-        properties["To"] = {"email": receiver_email}
-    else:
-        logger.warning(
-            f"Warning: Could not extract valid email from 'receiver' for subject: {subject} (Raw: {receiver_raw})")
     return properties
 
 
-def get_image_url_from_html(
-    html_content: Optional[str], hcti_user_id: str, hcti_api_key: str
-) -> Optional[str]:
+def get_image_url_from_html(html_content: str) -> Optional[str]:
     """
-    Calls HTML/CSS to Image API to render HTML and returns the image URL.
+    Get image URL from HTML content using render API.
 
     Args:
-        html_content: HTML content to render
-        hcti_user_id: HCTI API user ID
-        hcti_api_key: HCTI API key
+        html_content: HTML content to process
 
     Returns:
-        URL of the rendered image or None if rendering failed
+        Image URL if found, None otherwise
     """
-    if not html_content:
-        logger.info("    No HTML content provided for image rendering.")
-        return None
-    if not hcti_user_id or not hcti_api_key:
-        logger.error(
-            "    Error: HTML/CSS to Image API User ID or Key is missing internally. Skipping image generation."
-        )
-        return None
-
-    data = {
-        "html": html_content,
-        "ms_delay": 1000,  # 1-second delay for rendering complex HTML or external resources
-    }
-    logger.info(
-        f"    Requesting image generation from HCTI. HTML length: {
-            len(html_content)}. Delay: {
-            data['ms_delay']}ms.")
-
     try:
         response = requests.post(
-            url=HCTI_API_ENDPOINT,
-            data=data,
-            auth=(hcti_user_id, hcti_api_key),
-            timeout=30,
+            "https://api.render.com/v1/services/html-to-image/render",
+            json={"html": html_content}
         )
         response.raise_for_status()
-        image_data = response.json()
-        image_url = image_data.get("url")
-
-        if (
-            image_url
-            and isinstance(image_url, str)
-            and image_url.startswith("http")
-            and "hcti.io" in image_url
-        ):
-            logger.info(
-                f"    Image URL successfully generated by HCTI: {image_url}")
-            return image_url
-        else:
-            logger.warning(
-                f"    HCTI API call succeeded but no valid image URL in response: {image_data}")
-            return None
-    except requests.exceptions.HTTPError as http_err:
-        status_code_msg = "N/A"
-        response_text_msg = "No response text available."
-        if http_err.response is not None:
-            status_code_msg = str(http_err.response.status_code)
-            response_text_msg = http_err.response.text
-        logger.error(
-            f"    HTTP Error calling HTML/CSS to Image API: Status {status_code_msg}")
-        logger.error(f"    HCTI API Response: {response_text_msg}")
-        return None
-    except requests.exceptions.Timeout:
-        logger.error("    Timeout calling HTML/CSS to Image API.")
-        return None
-    except requests.exceptions.RequestException as e:
-        logger.error(f"    Network error calling HTML/CSS to Image API: {e}")
-        return None
-    except json.JSONDecodeError as e:
-        logger.error(f"    Error decoding JSON response from HCTI API: {e}")
-        if "response" in locals() and response is not None:
-            logger.error(f"    HCTI API Raw Response: {response.text}")
-        return None
+        return response.json().get("image_url")
     except Exception as e:
-        logger.error(f"    Unexpected error during image generation: {e}")
+        logger.error(f"Error getting image URL: {e}")
         return None
 
 
 def build_page_content_blocks(
-    plain_text_body: Optional[str], image_url_for_embed: Optional[str]
+    plain_text: str,
+    image_url: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
-    Constructs a list of Notion block objects including an embed for the image URL and plain text.
+    Build Notion page content blocks from text and optional image.
 
     Args:
-        plain_text_body: Plain text content of the email
-        image_url_for_embed: URL of the rendered HTML image
+        plain_text: Main text content
+        image_url: Optional image URL
 
     Returns:
-        List of Notion block objects for the page content
+        List of Notion block objects
     """
-    children_blocks = []
+    blocks = [
+        {
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "text": {
+                            "content": plain_text
+                        }
+                    }
+                ]
+            }
+        }
+    ]
 
-    # Add H2 Heading for HTML Image section (now an Embed)
-    if (
-        image_url_for_embed
-        and isinstance(image_url_for_embed, str)
-        and image_url_for_embed.startswith("http")
-    ):
-        logger.info(
-            f"    Image URL for Notion Embed block: {
-                image_url_for_embed!r}")
+    if image_url:
+        blocks.append({
+            "object": "block",
+            "type": "image",
+            "image": {
+                "type": "external",
+                "external": {
+                    "url": image_url
+                }
+            }
+        })
+
+    return blocks
+
+
+def handler(pd) -> Dict[str, Any]:
+    """
+    Create Notion task from Gmail email.
+    Args:
+        pd: The Pipedream context object or a dict
+    Returns:
+        Dictionary containing task details and any errors
+    """
+    try:
+        # Support both object and dict for pd.inputs and pd.steps
+        if hasattr(pd, 'inputs'):
+            inputs = pd.inputs
+        else:
+            inputs = pd.get('inputs', pd)
+        if hasattr(pd, 'steps'):
+            steps = pd.steps
+        else:
+            steps = pd.get('steps', pd)
+
+        # Get Notion OAuth Token (support both nested and flat dicts)
+        token = safe_get(inputs, ["notion", "$auth", "oauth_access_token"])
+        if not token:
+            token = inputs.get("notion_auth")
+        if not token:
+            return {"error": "Notion authentication is missing. Please provide a Notion account or token."}
+
+        # Get database_id (support both nested and flat dicts)
+        database_id = inputs.get("database_id")
+        if not database_id:
+            database_id = safe_get(inputs, ["notion", "database_id"])
+        if not database_id:
+            return {"error": "Database ID is missing. Please provide a Notion database ID."}
+
+        # Get email data from previous step or directly from pd
+        email_data = safe_get(steps, ["gmail", "$return_value"])
+        if email_data is None:
+            email_data = inputs.get("email")
+        if email_data is None:
+            return {"error": "No email data provided"}
+
+        # Extract email details
+        subject = email_data.get("subject", "")
+        sender = email_data.get("from", "")
+        html_content = email_data.get("html", "")
+        plain_text = email_data.get("text", "")
+        if not plain_text and "body" in email_data:
+            plain_text = email_data["body"]
+
+        # Get image URL if HTML content exists
+        image_url = None
+        if html_content:
+            image_url = get_image_url_from_html(html_content)
+
+        # Build Notion properties
+        properties = build_notion_properties(
+            subject,
+            extract_email(sender)
+        )
+
+        # Build page content
+        blocks = build_page_content_blocks(plain_text, image_url)
+
+        # Create Notion page
         try:
-            logger.info(
-                f"    Performing HEAD request to validate embed URL: {image_url_for_embed}")
-            head_response = requests.head(
-                image_url_for_embed, timeout=10, allow_redirects=True
-            )
-            content_type = head_response.headers.get("Content-Type")
-            logger.info(
-                f"    HEAD request to embed URL successful. Status: {
-                    head_response.status_code}, Content-Type: {content_type}")
-            if not content_type or not content_type.startswith("image/"):
-                logger.warning(
-                    f"    Note: URL {image_url_for_embed} Content-Type is '{content_type}', not strictly 'image/*'. Embed block might still work.")
-        except requests.exceptions.Timeout:
-            logger.warning(
-                f"    WARNING: Timeout performing HEAD request to embed URL {image_url_for_embed}.")
-        except requests.exceptions.RequestException as e_head:
-            logger.warning(
-                f"    WARNING: Could not perform HEAD request to embed URL {image_url_for_embed}: {e_head}")
-
-        children_blocks.append(
-            {
-                "object": "block",
-                "type": "heading_2",
-                "heading_2": {
-                    "rich_text": [
-                        {"type": "text", "text": {"content": "HTML Image (Embedded)"}}
-                    ]
+            response = requests.post(
+                NOTION_PAGES_URL,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Notion-Version": "2022-06-28",
+                    "Content-Type": "application/json"
                 },
-            }
-        )
-        children_blocks.append(
-            {"object": "block", "type": "embed", "embed": {"url": image_url_for_embed}}
-        )
-        children_blocks.append(
-            {"object": "block", "type": "divider", "divider": {}})
-    elif image_url_for_embed:
-        logger.warning(
-            f"    Warning: Rendered image URL '{image_url_for_embed}' was not valid for Notion block. Skipping embed block."
-        )
-    else:
-        logger.info(
-            "    Info: No image URL provided or image generation failed. Skipping HTML Image (Embed) section."
-        )
-
-    # Add H2 Heading for Plain Text Body section
-    if plain_text_body and plain_text_body.strip():
-        children_blocks.append(
-            {
-                "object": "block",
-                "type": "heading_2",
-                "heading_2": {
-                    "rich_text": [
-                        {"type": "text", "text": {"content": "Plain Text Body"}}
-                    ]
-                },
-            }
-        )
-
-        start_index = 0
-        while start_index < len(plain_text_body):
-            chunk = plain_text_body[start_index: start_index +
-                                    MAX_CODE_BLOCK_LENGTH]
-            children_blocks.append(
-                {
-                    "object": "block",
-                    "type": "code",
-                    "code": {
-                        "rich_text": [{"type": "text", "text": {"content": chunk}}],
-                        "language": "plain text",
+                json={
+                    "parent": {
+                        "database_id": database_id
                     },
+                    "properties": properties,
+                    "children": blocks
                 }
             )
-            start_index += MAX_CODE_BLOCK_LENGTH
-            if start_index < len(plain_text_body):
-                logger.info(
-                    f"    Plain text body is long, creating multiple code blocks. Current chunk ends at index {
-                        start_index - 1}")
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            msg = str(e)
+            if "401" in msg:
+                return {"error": "Invalid Notion authentication"}
+            if "404" in msg:
+                return {"error": "Database not found"}
+            return {"error": msg}
 
-    elif plain_text_body:
-        logger.warning(
-            "    Warning: Plain text body is empty or whitespace only. Skipping code block for plain text."
-        )
-
-    return children_blocks
-
-
-def handler(pd: "pipedream") -> Dict[str, Any]:
-    """
-    Creates Notion tasks from Gmail emails, including rendering HTML content as images.
-
-    Args:
-        pd: The Pipedream context object containing authentication and inputs
-
-    Returns:
-        Dictionary containing summary of created tasks and any errors
-
-    Raises:
-        Exception: If Notion account is not connected or authentication fails
-    """
-    # --- 1. Get Notion and HTML/CSS to Image API Credentials ---
-    try:
-        notion_token = pd.inputs["notion"]["$auth"]["oauth_access_token"]
-    except KeyError:
-        raise Exception(
-            "Notion account not connected or input name is not 'notion'. Please connect Notion using OAuth."
-        )
-
-    hcti_user_id = "6e014660-be7e-4510-8810-bceaa29dec73"
-    hcti_api_key = "73fc9bd1-f052-467c-8dc8-ef3dc7b11f89"
-    logger.info("Using hardcoded HTML/CSS to Image API credentials.")
-
-    # --- 2. Get Email Data from Previous Step ---
-    try:
-        emails_to_process = pd.steps[PREVIOUS_STEP_NAME]["$return_value"]
-    except KeyError:
-        logger.error(
-            f"Error: Could not find return value from step '{PREVIOUS_STEP_NAME}'.")
-        return {"error": f"Could not find data from step {PREVIOUS_STEP_NAME}"}
-    except Exception as e:
-        logger.error(
-            f"An unexpected error occurred accessing previous step data: {e}")
-        return {"error": "Failed to access previous step data."}
-
-    if not emails_to_process:
-        logger.info("No email data received. Nothing to process.")
-        return {"status": "No data received", "created_items": 0}
-    if not isinstance(emails_to_process, list):
-        logger.error(
-            f"Error: Expected a list from step '{PREVIOUS_STEP_NAME}', got {
-                type(emails_to_process)}.")
-        return {"error": "Invalid data format from previous step."}
-
-    # --- 3. Prepare for Notion API Calls ---
-    notion_pages_api_url = "https://api.notion.com/v1/pages"
-    notion_blocks_api_url_base = "https://api.notion.com/v1/blocks/"
-    headers = {
-        "Authorization": f"Bearer {notion_token}",
-        "Content-Type": "application/json",
-        "Notion-Version": NOTION_API_VERSION,
-    }
-
-    successful_mappings = []
-    errors = []
-    logger.info(
-        f"Starting to process {
-            len(emails_to_process)} email(s) for Notion...")
-
-    # --- 4. Loop Through Emails and Create Notion Items & Content ---
-    for index, email_data in enumerate(emails_to_process):
-        logger.info(
-            f"\nProcessing email {
-                index + 1}/{
-                len(emails_to_process)} (Subject: {
-                email_data.get(
-                    'subject',
-                    'N/A')})...")
-
-        if not isinstance(email_data, dict) or "message_id" not in email_data:
-            logger.warning(
-                f"  Skipping item {
-                    index +
-                    1}: Invalid format or missing 'message_id'.")
-            errors.append(
-                {
-                    "index": index + 1,
-                    "error": "Invalid item format or missing message_id",
-                }
-            )
-            continue
-
-        gmail_message_id = email_data["message_id"]
-        page_id = None
-        rendered_image_url = None
-
-        try:
-            properties_payload = build_notion_properties(email_data)
-            if "Task name" not in properties_payload:
-                raise ValueError("Failed to generate 'Task name' property.")
-
-            page_creation_body = {
-                "parent": {"database_id": NOTION_DATABASE_ID},
-                "properties": properties_payload,
+        data = response.json()
+        return {
+            "success": {
+                "task_id": data.get("id"),
+                "task_url": data.get("url"),
+                "image_url": image_url
             }
-            logger.info(
-                f"  Sending request to create Notion page with properties: {
-                    json.dumps(
-                        properties_payload,
-                        indent=2)}")
-            response_page = requests.post(
-                notion_pages_api_url, headers=headers, json=page_creation_body
-            )
-            response_page.raise_for_status()
-            created_page_data = response_page.json()
-            page_id = created_page_data.get("id")
-            logger.info(f"  Successfully created Notion page: ID {page_id}")
+        }
 
-            logger.info(
-                f"    Waiting for 2 seconds before appending content to page {page_id}...")
-            time.sleep(2)
-
-            html_to_render = email_data.get("html_body")
-            if page_id and html_to_render and hcti_user_id and hcti_api_key:
-                rendered_image_url = get_image_url_from_html(
-                    html_to_render, hcti_user_id, hcti_api_key
-                )
-                logger.info(
-                    f"    Rendered Image URL obtained from HCTI service for embed: {rendered_image_url}")
-            elif not html_to_render:
-                logger.info(
-                    "    No HTML body found in email_data to render as image.")
-            elif not (hcti_user_id and hcti_api_key):
-                logger.warning(
-                    "    HTML/CSS to Image API credentials missing (should be hardcoded). Skipping image generation."
-                )
-
-            plain_text_content = email_data.get("plain_text_body", "")
-            if page_id:
-                content_blocks = build_page_content_blocks(
-                    plain_text_content, rendered_image_url
-                )
-                if content_blocks:
-                    chunks = [
-                        content_blocks[i: i + 100]
-                        for i in range(0, len(content_blocks), 100)
-                    ]
-                    for chunk_idx, chunk_data in enumerate(chunks):
-                        append_blocks_body = {"children": chunk_data}
-                        logger.info(
-                            f"    Appending content blocks (chunk {
-                                chunk_idx + 1}/{
-                                len(chunks)}) to page ID: {page_id}")
-                        try:
-                            logger.info(
-                                f"    Attempting to send blocks payload: {
-                                    json.dumps(
-                                        append_blocks_body,
-                                        indent=2)}")
-                        except Exception as json_e:
-                            logger.error(
-                                f"    Could not serialize append_blocks_body for logging: {json_e}")
-                            logger.info(
-                                f"    Raw append_blocks_body (may be large): {append_blocks_body}")
-
-                        blocks_url = f"{notion_blocks_api_url_base}{page_id}/children"
-                        response_blocks = requests.patch(
-                            blocks_url, headers=headers, json=append_blocks_body)
-                        response_blocks.raise_for_status()
-                        logger.info(
-                            f"    Successfully appended content blocks (chunk {
-                                chunk_idx + 1}).")
-                        if len(chunks) > 1:
-                            time.sleep(0.3)
-                else:
-                    logger.info(
-                        "    No content blocks (text or image) to append.")
-            else:
-                logger.warning(
-                    "    Page ID not available, skipping content append.")
-
-            successful_mappings.append(
-                {
-                    "gmail_message_id": gmail_message_id,
-                    "notion_page_id": page_id,
-                    "rendered_image_url": rendered_image_url,
-                }
-            )
-
-        except requests.exceptions.HTTPError as http_err:
-            status_code_str = "N/A"
-            error_message = str(http_err)
-            error_details = {}
-            validation_errors = None
-
-            if http_err.response is not None:
-                status_code_str = str(http_err.response.status_code)
-                try:
-                    if "application/json" in http_err.response.headers.get(
-                        "Content-Type", ""
-                    ):
-                        error_details = http_err.response.json()
-                        error_message = error_details.get(
-                            "message", str(http_err))
-                        validation_errors = error_details.get(
-                            "validation_errors")
-                    else:
-                        error_details = {
-                            "raw_response": http_err.response.text}
-                        error_message = (
-                            http_err.response.text
-                            if http_err.response.text
-                            else str(http_err)
-                        )
-                except json.JSONDecodeError:
-                    error_details = {"raw_response": http_err.response.text}
-                    error_message = f"Failed to decode JSON response. Raw text: {
-                        http_err.response.text}"
-                except Exception as e_resp:
-                    error_message = f"Error processing HTTPError response: {e_resp}"
-                    error_details = {"processing_error": str(e_resp)}
-
-            logger.error(
-                f"  HTTP Error for Gmail ID {gmail_message_id}: {status_code_str} - {error_message}")
-            if validation_errors:
-                logger.error(
-                    f"  Validation Errors: {
-                        json.dumps(
-                            validation_errors,
-                            indent=2)}")
-            elif error_details:
-                logger.error(
-                    f"  Error Details: {
-                        json.dumps(
-                            error_details,
-                            indent=2)}")
-
-            errors.append(
-                {
-                    "index": index + 1,
-                    "gmail_message_id": gmail_message_id,
-                    "subject": email_data.get("subject"),
-                    "status_code": status_code_str,
-                    "error": error_message,
-                    "validation_errors": validation_errors,
-                    "raw_error_details": error_details,
-                    "notion_page_id_attempted": page_id,
-                }
-            )
-        except Exception as e:
-            logger.error(
-                f"  An unexpected error for Gmail ID {gmail_message_id}: {e}")
-            errors.append(
-                {
-                    "index": index + 1,
-                    "gmail_message_id": gmail_message_id,
-                    "subject": email_data.get("subject"),
-                    "error": f"Unexpected error: {e}",
-                    "notion_page_id_attempted": page_id,
-                }
-            )
-        time.sleep(0.5)
-
-    # --- 5. Return Summary ---
-    logger.info("\n--- Processing Complete ---")
-    logger.info(f"Successfully processed items: {len(successful_mappings)}")
-    logger.info(f"Errors encountered: {len(errors)}")
-    return {
-        "status": "Completed",
-        "total_processed": len(emails_to_process),
-        "successful_mappings": successful_mappings,
-        "errors": errors,
-    }
+    except Exception as e:
+        logger.error(f"Error creating Notion task: {e}")
+        return {"error": str(e)}

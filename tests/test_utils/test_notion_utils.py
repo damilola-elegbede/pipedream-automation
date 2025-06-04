@@ -1,7 +1,6 @@
 """Tests for Notion utility functions."""
 
 
-
 from src.utils.notion_utils import (
     extract_notion_page_id_from_url,
     extract_notion_task_data,
@@ -16,7 +15,10 @@ def test_extract_notion_task_data():
     trigger_event = {
         "properties": {
             "Due Date": {
-                "date": {"start": "2024-03-20T10:00:00Z", "end": "2024-03-20T11:00:00Z"}
+                "date": {
+                    "start": "2024-03-20T10:00:00Z",
+                    "end": "2024-03-20T11:00:00Z",
+                }
             },
             "Task name": {"title": [{"plain_text": "Test Task"}]},
             "Google Event ID": {"rich_text": [{"plain_text": "event123"}]},
@@ -34,8 +36,9 @@ def test_extract_notion_task_data():
     assert result["url"] == "https://notion.so/page123"
 
     # Test with minimal data
-    minimal_event = {"properties": {"Task name": {
-        "title": [{"plain_text": "Minimal Task"}]}}}
+    minimal_event = {
+        "properties": {"Task name": {"title": [{"plain_text": "Minimal Task"}]}}
+    }
 
     result = extract_notion_task_data(minimal_event)
     assert result["task_name"] == "Minimal Task"
@@ -68,8 +71,10 @@ def test_format_notion_properties():
     # Test rich text property
     properties = {"Description": {"rich_text": "Test Description"}}
     result = format_notion_properties(properties)
-    assert (result["Description"]["rich_text"][0]
-            ["text"]["content"] == "Test Description")
+    assert (
+        result["Description"]["rich_text"][0]["text"]["content"]
+        == "Test Description"
+    )
 
     # Test date property
     properties = {"Due Date": {"date": "2024-03-20"}}
@@ -115,13 +120,17 @@ def test_extract_notion_page_id_from_url():
     """Test extracting Notion page IDs from URLs."""
     # Test valid URL
     url = "https://notion.so/1234567890abcdef1234567890abcdef"
-    assert extract_notion_page_id_from_url(
-        url) == "1234567890abcdef1234567890abcdef"
+    assert (
+        extract_notion_page_id_from_url(url)
+        == "1234567890abcdef1234567890abcdef"
+    )
 
     # Test URL with query parameters
     url = "https://notion.so/1234567890abcdef1234567890abcdef?p=123"
-    assert extract_notion_page_id_from_url(
-        url) == "1234567890abcdef1234567890abcdef"
+    assert (
+        extract_notion_page_id_from_url(url)
+        == "1234567890abcdef1234567890abcdef"
+    )
 
     # Test invalid URL
     url = "https://notion.so/invalid"

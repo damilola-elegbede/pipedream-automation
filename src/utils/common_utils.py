@@ -1,107 +1,114 @@
 """
-Common Utility Functions
+Common Utilities
 
-This module contains utility functions that are shared across different integrations.
-These functions provide common functionality for data access, validation, and processing.
+This module provides common utility functions used across the project.
 """
 
 import logging
-from typing import Any, List, Optional, Union
+import re
+from typing import Any, Dict, List, Optional, Union
 
-# Configure basic logging
+# Configure basic logging for Pipedream
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-def safe_get(
-    data: Any, keys: Union[str, List[Union[str, int]]], default: Any = None
-) -> Any:
+def safe_get(obj, path, default=None):
     """
-    Safely accesses nested dictionary keys or list indices.
-
+    Safely get a value from a nested dictionary or list using a path.
     Args:
-        data: The dictionary or list to access
-        keys: A single key or list of keys/indices representing the path
-        default: The value to return if the path is not found or an error occurs
-
+        obj: Dictionary or list to get value from
+        path: List of keys/indices or a single key/index
+        default: Value to return if path is not found
     Returns:
-        The value at the nested path or the default value
+        Value at path or default if not found
     """
-    current = data
-    if not isinstance(keys, list):
-        keys = [keys]
-
-    for key in keys:
-        try:
+    if obj is None:
+        return default
+    if path is None or path == []:
+        return default
+    if not isinstance(path, list):
+        path = [path]
+    current = obj
+    try:
+        for key in path:
             if isinstance(current, dict):
-                current = current.get(key)
-            elif isinstance(current, list):
-                # Ensure the key is a valid integer index
-                if isinstance(key, int) and 0 <= key < len(current):
+                current = current.get(key, default)
+            elif isinstance(current, list) and isinstance(key, int):
+                if 0 <= key < len(current):
                     current = current[key]
                 else:
-                    # Log only if index access is attempted, not for .get() on
-                    # list
-                    if isinstance(key, int):
-                        logger.warning(
-                            f"Invalid list index '{key}' for list: {current}"
-                        )
                     return default
             else:
-                # If current is None or not a dict/list at an intermediate step
-                logger.warning(
-                    f"Cannot access key '{key}' in non-dict/list item: {current}")
                 return default
-
-            # If .get() returned None or list index access resulted in None
-            if current is None:
-                return default
-
-        except (TypeError, IndexError, AttributeError) as e:
-            logger.warning(f"Error accessing key '{key}': {e}")
-            return default
-    return current
+        return current
+    except Exception:
+        return default
 
 
-def extract_id_from_url(
-        url: str,
-        pattern: str = r"[a-f0-9]{32}") -> Optional[str]:
+def format_error_message(error: Union[str, Exception]) -> str:
     """
-    Extracts an ID from a URL using a regex pattern.
+    Format error message for consistent error handling.
 
     Args:
-        url: The URL to extract the ID from
-        pattern: The regex pattern to match the ID (default matches Notion page IDs)
+        error: Error message or exception
 
     Returns:
-        The extracted ID or None if extraction fails
+        Formatted error message
     """
+    if isinstance(error, Exception):
+        return str(error)
+    return error
+
+
+def validate_required_fields(data: Dict[str, Any], fields: List[str]) -> Optional[str]:
+    """
+    Validate that required fields are present in data.
+
+    Args:
+        data: Dictionary to validate
+        fields: List of required field names
+
+    Returns:
+        Error message if validation fails, None otherwise
+    """
+    missing = [field for field in fields if field not in data]
+    if missing:
+        return f"Missing required fields: {', '.join(missing)}"
+    return None
+
+
+def extract_id_from_url(url: str, pattern: str = None) -> Optional[str]:
+    """
+    Extract ID from a URL using a default or custom pattern.
+    Args:
+        url: URL to extract ID from
+        pattern: Optional custom regex pattern
+    Returns:
+        Extracted ID or None if not found
+    """
+    if not url:
+        return None
     try:
-        import re
-
-        # Remove query parameters and fragments
-        url = url.split("?")[0].split("#")[0]
-
-        # For patterns with $ anchor, we need to check if the match is at the
-        # end
-        if pattern.endswith("$"):
-            # Remove the $ anchor for searching
-            search_pattern = pattern[:-1]
-            # Use word boundaries to ensure exact matches
-            search_pattern = r"\b" + search_pattern + r"\b"
-            matches = re.findall(search_pattern, url)
-            if matches:
-                last_match = matches[-1]
-                # Check if the match is at the end of the URL or followed by a
-                # path separator
-                if url.endswith(last_match) or f"{last_match}/" in url:
-                    return last_match
-        else:
-            # For patterns without $ anchor, just find all matches and take the
-            # last one
-            matches = re.findall(pattern, url)
-            if matches:
-                return matches[-1]
-    except Exception as e:
-        logger.error(f"Error extracting ID from URL '{url}': {e}")
+        if pattern:
+            match = re.search(pattern, url)
+            if match:
+                if match.groups():
+                    return match.group(1)
+                return match.group(0)
+            return None
+        # Default patterns for Notion and common IDs
+        patterns = [
+            r'([a-fA-F0-9]{32})',  # 32-char hex
+            r'([a-fA-F0-9]{24})',  # 24-char hex
+            r'([a-fA-F0-9]{16})',  # 16-char hex
+            r'([a-fA-F0-9]{8})',   # 8-char hex
+            r'([a-zA-Z0-9-]{36})',  # UUID
+        ]
+        for pat in patterns:
+            match = re.search(pat, url)
+            if match:
+                return match.group(1)
+    except Exception:
+        return None
     return None

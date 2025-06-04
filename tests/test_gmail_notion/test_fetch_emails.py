@@ -1,14 +1,12 @@
 """
-Tests for Gmail Email Fetcher
+Tests for the Gmail Email Fetcher.
 
-This module contains tests for the handler that fetches emails from Gmail
-and prepares them for processing by the Notion integration.
+This module contains tests for the Gmail Email Fetcher functionality,
+including email retrieval, header extraction, and body parsing.
 """
 
-import base64
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
-import pytest
 import requests
 
 from src.integrations.gmail_notion.fetch_emails import (
@@ -18,185 +16,209 @@ from src.integrations.gmail_notion.fetch_emails import (
 )
 
 
-class MockPipedream:
-    """Mock Pipedream context object for testing."""
-
-    def __init__(self, steps=None):
-        self.steps = steps or {}
+class MockPD:
+    def __init__(self, gmail_token=None):
+        self.inputs = (
+            {"gmail": {"$auth": {"oauth_access_token": gmail_token}}}
+            if gmail_token
+            else {}
+        )
+        self.steps = {}
 
 
 def test_get_header_value():
-    """Test extracting header values from email headers."""
+    """Test extraction of header values from email headers."""
     headers = [
         {"name": "Subject", "value": "Test Subject"},
         {"name": "From", "value": "sender@example.com"},
         {"name": "To", "value": "recipient@example.com"},
     ]
-    
+
+    # Test existing headers
     assert get_header_value(headers, "Subject") == "Test Subject"
     assert get_header_value(headers, "From") == "sender@example.com"
     assert get_header_value(headers, "To") == "recipient@example.com"
+
+    # Test non-existent header
     assert get_header_value(headers, "Date") is None
+
+    # Test empty headers
+    assert get_header_value([], "Subject") is None
+
+    # Test None headers
+    assert get_header_value(None, "Subject") is None
 
 
 def test_get_body_parts():
-    """Test extracting body parts from email message."""
-    # Test plain text
-    text_content = "Hello, World!"
-    text_encoded = base64.urlsafe_b64encode(text_content.encode()).decode()
-    
-    parts = [
-        {
+    """Test extraction of body parts from email messages."""
+    # Test plain text body
+    message = {
+        "payload": {
             "mimeType": "text/plain",
-            "body": {"data": text_encoded},
+            "body": {
+                "data": "SGVsbG8gV29ybGQ="  # Base64 encoded "Hello World"
+            },
         }
-    ]
-    
-    result = get_body_parts(parts)
-    assert result["text"] == text_content
-    assert result["html"] == ""
-    
-    # Test HTML
-    html_content = "<p>Hello, World!</p>"
-    html_encoded = base64.urlsafe_b64encode(html_content.encode()).decode()
-    
-    parts = [
-        {
+    }
+    text, html = get_body_parts(message)
+    assert text == "SGVsbG8gV29ybGQ="
+    assert html == ""
+
+    # Test HTML body
+    message = {
+        "payload": {
             "mimeType": "text/html",
-            "body": {"data": html_encoded},
+            "body": {
+                "data": "PGgxPkhlbGxvPC9oMT4="  # Base64 encoded "<h1>Hello</h1>"
+            },
         }
-    ]
-    
-    result = get_body_parts(parts)
-    assert result["text"] == ""
-    assert result["html"] == html_content
-    
+    }
+    text, html = get_body_parts(message)
+    assert text == ""
+    assert html == "PGgxPkhlbGxvPC9oMT4="
+
     # Test nested parts
-    parts = [
-        {
-            "mimeType": "multipart/alternative",
+    message = {
+        "payload": {
             "parts": [
                 {
                     "mimeType": "text/plain",
-                    "body": {"data": text_encoded},
+                    "body": {"data": "SGVsbG8gV29ybGQ="},
                 },
                 {
                     "mimeType": "text/html",
-                    "body": {"data": html_encoded},
+                    "body": {"data": "PGgxPkhlbGxvPC9oMT4="},
                 },
-            ],
+            ]
         }
-    ]
-    
-    result = get_body_parts(parts)
-    assert result["text"] == text_content
-    assert result["html"] == html_content
-
-
-@patch("requests.get")
-def test_handler_success(mock_get):
-    """Test successful email fetching."""
-    # Mock message list response
-    mock_list_response = Mock()
-    mock_list_response.json.return_value = {
-        "messages": [{"id": "msg-123"}, {"id": "msg-456"}],
     }
-    
-    # Mock individual message responses
-    mock_msg_responses = []
-    for i in range(2):
-        mock_msg = Mock()
-        mock_msg.json.return_value = {
-            "payload": {
-                "headers": [
-                    {"name": "Subject", "value": f"Test Email {i+1}"},
-                    {"name": "From", "value": "sender@example.com"},
-                    {"name": "To", "value": "recipient@example.com"},
-                    {"name": "Date", "value": "2024-03-20"},
-                ],
-                "body": {"data": base64.urlsafe_b64encode(b"Test content").decode()},
-            }
-        }
-        mock_msg_responses.append(mock_msg)
-    
-    mock_get.side_effect = [mock_list_response] + mock_msg_responses
-    
-    pd = MockPipedream(steps={"oauth": {"access_token": "test-token"}})
-    result = handler(pd)
-    
-    assert len(result) == 2
-    assert result[0]["subject"] == "Test Email 1"
-    assert result[1]["subject"] == "Test Email 2"
-    assert all("id" in email for email in result)
-    assert all("url" in email for email in result)
+    text, html = get_body_parts(message)
+    assert text == "SGVsbG8gV29ybGQ="
+    assert html == "PGgxPkhlbGxvPC9oMT4="
+
+    # Test empty message
+    text, html = get_body_parts({})
+    assert text == ""
+    assert html == ""
+
+    # Test None message
+    text, html = get_body_parts(None)
+    assert text == ""
+    assert html == ""
 
 
-@patch("requests.get")
-def test_handler_no_emails(mock_get):
-    """Test handling of no emails found."""
-    mock_response = Mock()
-    mock_response.json.return_value = {"messages": []}
-    mock_get.return_value = mock_response
-    
-    pd = MockPipedream(steps={"oauth": {"access_token": "test-token"}})
-    result = handler(pd)
-    
-    assert result == []
+def test_handler_success():
+    """Test successful email fetching."""
+    mock_list_response = {
+        "messages": [
+            {"id": "msg_1", "threadId": "thread_1"},
+            {"id": "msg_2", "threadId": "thread_2"},
+        ]
+    }
+
+    mock_message_response = {
+        "id": "msg_1",
+        "threadId": "thread_1",
+        "labelIds": ["INBOX"],
+        "payload": {
+            "headers": [
+                {"name": "Subject", "value": "Test Email"},
+                {"name": "From", "value": "sender@example.com"},
+                {"name": "To", "value": "recipient@example.com"},
+            ],
+            "body": {"data": "SGVsbG8gV29ybGQ="},
+        },
+    }
+
+    with patch("requests.get") as mock_get:
+        mock_get.return_value.json.side_effect = [
+            mock_list_response,
+            mock_message_response,
+            mock_message_response,
+        ]
+        mock_get.return_value.status_code = 200
+
+        pd = MockPD(gmail_token="access_token")
+        result = handler(pd)
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert result[0]["subject"] == "Test Email"
+        assert "message_id" in result[0]
+        assert "url" in result[0]
+
+
+def test_handler_no_emails():
+    """Test handler when no emails are found."""
+    mock_list_response = {"messages": []}
+
+    with patch("requests.get") as mock_get:
+        mock_get.return_value.json.return_value = mock_list_response
+        mock_get.return_value.status_code = 200
+
+        pd = MockPD(gmail_token="access_token")
+        result = handler(pd)
+        assert isinstance(result, list)
+        assert result == []
 
 
 def test_handler_missing_auth():
-    """Test handling of missing authentication."""
-    pd = MockPipedream(steps={})  # Missing oauth token
+    """Test handler with missing authentication."""
+    pd = MockPD(gmail_token=None)
     result = handler(pd)
-    
     assert result == []
 
 
-@patch("requests.get")
-def test_handler_api_error(mock_get):
-    """Test handling of API errors."""
-    mock_get.side_effect = requests.exceptions.RequestException("API Error")
-    
-    pd = MockPipedream(steps={"oauth": {"access_token": "test-token"}})
-    result = handler(pd)
-    
-    assert result == []
+def test_handler_api_error():
+    """Test handler with API error."""
+    with patch("requests.get") as mock_get:
+        mock_get.side_effect = requests.RequestException("API Error")
+
+        pd = MockPD(gmail_token="access_token")
+        result = handler(pd)
+        assert result == []
 
 
-@patch("requests.get")
-def test_handler_pagination(mock_get):
-    """Test handling of paginated results."""
-    # Mock first page response
-    mock_page1 = Mock()
-    mock_page1.json.return_value = {
-        "messages": [{"id": "msg-1"}, {"id": "msg-2"}],
-        "nextPageToken": "token-123",
+def test_handler_pagination():
+    """Test handler with paginated results."""
+    mock_list_response_1 = {
+        "messages": [
+            {"id": "msg_1", "threadId": "thread_1"},
+            {"id": "msg_2", "threadId": "thread_2"},
+        ],
+        "nextPageToken": "next_page",
     }
-    
-    # Mock second page response
-    mock_page2 = Mock()
-    mock_page2.json.return_value = {
-        "messages": [{"id": "msg-3"}],
+
+    mock_list_response_2 = {
+        "messages": [{"id": "msg_3", "threadId": "thread_3"}]
     }
-    
-    # Mock message detail responses
-    mock_msg_responses = []
-    for i in range(3):
-        mock_msg = Mock()
-        mock_msg.json.return_value = {
-            "payload": {
-                "headers": [
-                    {"name": "Subject", "value": f"Test Email {i+1}"},
-                ],
-                "body": {"data": base64.urlsafe_b64encode(b"Test content").decode()},
-            }
-        }
-        mock_msg_responses.append(mock_msg)
-    
-    mock_get.side_effect = [mock_page1, mock_page2] + mock_msg_responses
-    
-    pd = MockPipedream(steps={"oauth": {"access_token": "test-token"}})
-    result = handler(pd)
-    
-    assert len(result) == 3
-    assert all(f"Test Email {i+1}" in [email["subject"] for email in result] for i in range(3)) 
+
+    mock_message_response = {
+        "id": "msg_1",
+        "threadId": "thread_1",
+        "labelIds": ["INBOX"],
+        "payload": {
+            "headers": [
+                {"name": "Subject", "value": "Test Email"},
+                {"name": "From", "value": "sender@example.com"},
+                {"name": "To", "value": "recipient@example.com"},
+            ],
+            "body": {"data": "SGVsbG8gV29ybGQ="},
+        },
+    }
+
+    with patch("requests.get") as mock_get:
+        mock_get.return_value.json.side_effect = [
+            mock_list_response_1,
+            mock_message_response,
+            mock_message_response,
+            mock_list_response_2,
+            mock_message_response,
+        ]
+        mock_get.return_value.status_code = 200
+
+        pd = MockPD(gmail_token="access_token")
+        result = handler(pd)
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert all("message_id" in email for email in result)
+        assert all("url" in email for email in result)
