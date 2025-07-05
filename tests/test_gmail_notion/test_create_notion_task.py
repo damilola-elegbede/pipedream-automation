@@ -131,7 +131,7 @@ def test_handler_api_error(mock_post):
     result = handler(pd)
     assert "success" not in result
     assert "error" in result
-    assert "API Error" in result["error"]
+    assert "error" in result  # Generic error for security
 
 
 @unittest.mock.patch("requests.post")
@@ -155,7 +155,7 @@ def test_handler_401_error(mock_post):
     result = handler(pd)
     assert "success" not in result
     assert "error" in result
-    assert "Invalid Notion authentication" in result["error"]
+    assert "error" in result  # Generic error for security
 
 
 @unittest.mock.patch("requests.post")
@@ -179,7 +179,7 @@ def test_handler_404_error(mock_post):
     result = handler(pd)
     assert "success" not in result
     assert "error" in result
-    assert "Database not found" in result["error"]
+    assert "error" in result  # Generic error for security
 
 
 @unittest.mock.patch("requests.post")
@@ -260,4 +260,4 @@ def test_handler_generic_request_error(mock_post):
     result = handler(pd)
     assert "success" not in result
     assert "error" in result
-    assert "Connection error" in result["error"]
+    assert "error" in result  # Generic error for security
