@@ -26,7 +26,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install pytest pytest-cov
+        pip install pytest
     
     - name: Debug repository structure
       run: |
@@ -50,14 +50,6 @@ jobs:
     #      - name: Run pydocstyle
     #        run: pydocstyle src tests
     
-    - name: Run tests with coverage
+    - name: Run tests
       run: |
-        python -m pytest --cov=src --cov-report=xml -v
-    
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
-        fail_ci_if_error: true
-        token: ${{ secrets.CODECOV_TOKEN }}
-        verbose: true 
+        python -m pytest -v 
