@@ -1,5 +1,76 @@
 """
 Gmail to Notion Task Creator
+Generated: 2025-07-05 17:21:23
+Bundled for Pipedream deployment
+"""
+
+import logging
+import json
+import requests
+from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+from requests.exceptions import HTTPError, RequestException
+
+# Configure logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# === EMBEDDED DEPENDENCIES ===
+# === CONSTANTS ===
+NOTION_API_VERSION = "2022-06-28"
+NOTION_API_BASE_URL = "https://api.notion.com/v1"
+DEFAULT_HEADERS = {
+    "Content-Type": "application/json",
+}
+NOTION_HEADERS = {
+    **DEFAULT_HEADERS,
+    "Notion-Version": NOTION_API_VERSION,
+}
+NOTION_PAGES_URL = f"{NOTION_API_BASE_URL}/pages"
+NOTION_BLOCKS_URL = f"{NOTION_API_BASE_URL}/blocks"
+ERROR_INVALID_INPUT = "Required input field '{}' is missing"
+SUCCESS_CREATED = "Successfully created {}"
+
+# === UTILITY FUNCTIONS ===
+# From src/utils/common_utils.py
+def safe_get(obj, path, default=None):
+    """
+    Safely get a value from a nested dictionary or list using a path.
+    Args:
+        obj: Dictionary or list to get value from
+        path: List of keys/indices or a single key/index
+        default: Value to return if path is not found
+    Returns:
+        Value at path or default if not found
+    """
+    if obj is None:
+        return default
+    if path is None or path == []:
+        return default
+    if not isinstance(path, list):
+        path = [path]
+    current = obj
+    try:
+        for key in path:
+            if isinstance(current, dict):
+                current = current.get(key, default)
+            elif isinstance(current, list) and isinstance(key, int):
+                if 0 <= key < len(current):
+                    current = current[key]
+                else:
+                    return default
+            else:
+                return default
+        return current
+    except Exception:
+        return default
+
+
+
+
+# === MAIN MODULE ===
+"""
+Gmail to Notion Task Creator
 
 This module creates Notion tasks from Gmail emails, handling authentication,
 task creation, and content formatting for the Notion API.
@@ -11,10 +82,6 @@ from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 import requests
 from requests.exceptions import HTTPError, RequestException
 
-from src.utils.common_utils import safe_get
-from src.utils.validation import validate_pipedream_inputs, validate_notion_auth
-from src.utils.error_handling import pipedream_error_handler, handle_api_response, APIError
-from src.config.constants import (
     NOTION_API_BASE_URL,
     NOTION_PAGES_URL,
     NOTION_BLOCKS_URL,
@@ -22,9 +89,6 @@ from src.config.constants import (
     ERROR_INVALID_INPUT,
     SUCCESS_CREATED
 )
-
-if TYPE_CHECKING:
-    import pipedream
 
 # Configure basic logging for Pipedream
 logger = logging.getLogger()
@@ -241,3 +305,7 @@ def handler(pd) -> Dict[str, Any]:
             "image_url": image_url
         }
     }
+
+# === PIPEDREAM HANDLER ===
+# The handler function is the entry point for Pipedream
+# Usage: return handler(pd)

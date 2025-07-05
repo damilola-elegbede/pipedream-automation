@@ -1,21 +1,75 @@
 """
-Notion Task Update Handler
+Notion Update Handler
+Generated: 2025-07-05 17:21:23
+Bundled for Pipedream deployment
+"""
+
+import logging
+import json
+import requests
+from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+from requests.exceptions import HTTPError, RequestException
+
+# Configure logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# === EMBEDDED DEPENDENCIES ===
+# === CONSTANTS ===
+NOTION_API_BASE_URL = "https://api.notion.com/v1"
+NOTION_PAGES_URL = f"{NOTION_API_BASE_URL}/pages"
+
+# === UTILITY FUNCTIONS ===
+# From src/utils/common_utils.py
+def safe_get(obj, path, default=None):
+    """
+    Safely get a value from a nested dictionary or list using a path.
+    Args:
+        obj: Dictionary or list to get value from
+        path: List of keys/indices or a single key/index
+        default: Value to return if path is not found
+    Returns:
+        Value at path or default if not found
+    """
+    if obj is None:
+        return default
+    if path is None or path == []:
+        return default
+    if not isinstance(path, list):
+        path = [path]
+    current = obj
+    try:
+        for key in path:
+            if isinstance(current, dict):
+                current = current.get(key, default)
+            elif isinstance(current, list) and isinstance(key, int):
+                if 0 <= key < len(current):
+                    current = current[key]
+                else:
+                    return default
+            else:
+                return default
+        return current
+    except Exception:
+        return default
+
+
+
+
+# === MAIN MODULE ===
+"""
+Update Handler
 
 This module handles updates to Notion tasks and syncs them to Google Calendar,
 managing authentication, task updates, and event synchronization.
 """
 
 import logging
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
-from src.config.constants import (NOTION_API_BASE_URL, NOTION_PAGES_URL)
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
 import requests
-from requests.exceptions import HTTPError, RequestException
 
-from src.utils.common_utils import safe_get
-
-if TYPE_CHECKING:
-    import pipedream
 
 # Configure basic logging for Pipedream
 logger = logging.getLogger()
@@ -26,10 +80,7 @@ CALENDAR_API_BASE_URL = "https://www.googleapis.com/calendar/v3"
 CALENDAR_EVENTS_URL = f"{CALENDAR_API_BASE_URL}/calendars/primary/events"
 
 
-def get_notion_page(
-    token: str,
-    page_id: str
-) -> Optional[Dict[str, Any]]:
+def get_notion_page(token: str, page_id: str) -> Optional[Dict[str, Any]]:
     """
     Get Notion page details.
 
@@ -55,17 +106,15 @@ def get_notion_page(
         return None
 
 
-def build_calendar_event(
-    page: Dict[str, Any]
-) -> Dict[str, Any]:
+def build_calendar_event(page: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Build Google Calendar event from Notion page.
+    Build calendar event from Notion page.
 
     Args:
         page: Notion page data
 
     Returns:
-        Dictionary containing calendar event data
+        Calendar event data
     """
     properties = page.get("properties", {})
     name = properties.get("Name", {}).get("title", [{}])[0].get("text", {}).get("content", "Untitled Task")
@@ -90,10 +139,7 @@ def build_calendar_event(
     return event
 
 
-def create_calendar_event(
-    token: str,
-    event: Dict[str, Any]
-) -> Optional[Dict[str, Any]]:
+def create_calendar_event(token: str, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Create event in Google Calendar.
 
@@ -150,36 +196,35 @@ def handler(pd: "pipedream") -> Dict[str, Any]:
                 "'calendar'. Please connect a Google Calendar account."
             )
 
-        # Get updated page ID from input
+        # Get updated page
         page_id = pd.inputs.get("page_id")
         if not page_id:
-            raise Exception("page_id is required")
+            raise Exception("No page ID provided")
 
-        # Get updated page
         page = get_notion_page(notion_token, page_id)
         if not page:
-            return {
-                "error": f"Could not find Notion page with ID: {page_id}"
-            }
+            raise Exception("Failed to get Notion page")
 
         # Create calendar event
-        event_data = build_calendar_event(page)
-        event = create_calendar_event(calendar_token, event_data)
-        if not event:
-            return {
-                "error": "Failed to create calendar event"
-            }
+        event = build_calendar_event(page)
+        created_event = create_calendar_event(calendar_token, event)
+        if not created_event:
+            raise Exception("Failed to create calendar event")
 
         return {
-            "message": "Successfully created calendar event",
+            "message": "Successfully synced task to calendar",
             "event": {
-                "title": event.get("summary", "Untitled Event"),
-                "url": event.get("htmlLink")
+                "title": event["summary"],
+                "url": created_event.get("htmlLink")
             }
         }
 
     except Exception as e:
-        logger.error(f"Error handling Notion update: {e}")
+        logger.error(f"Error handling update: {e}")
         return {
             "error": str(e)
         }
+
+# === PIPEDREAM HANDLER ===
+# The handler function is the entry point for Pipedream
+# Usage: return handler(pd)

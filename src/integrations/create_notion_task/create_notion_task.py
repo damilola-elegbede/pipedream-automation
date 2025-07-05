@@ -7,6 +7,7 @@ task creation, and content formatting for the Notion API.
 
 import logging
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from src.config.constants import (NOTION_API_BASE_URL, NOTION_PAGES_URL)
 
 import requests
 from bs4 import BeautifulSoup
@@ -21,8 +22,6 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # --- Configuration ---
-NOTION_API_BASE_URL = "https://api.notion.com/v1"
-NOTION_PAGES_URL = f"{NOTION_API_BASE_URL}/pages"
 
 
 def extract_email(email_data: Dict[str, Any]) -> Dict[str, Any]:

@@ -107,7 +107,7 @@ def test_handler_missing_database_id():
     result = handler(pd)
     assert "success" not in result
     assert "error" in result
-    assert "database id" in result["error"].lower()
+    assert "database_id" in result["error"].lower()
 
 
 @unittest.mock.patch("requests.post")
