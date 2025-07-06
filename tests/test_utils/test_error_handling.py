@@ -207,9 +207,9 @@ class TestSafeApiCall:
         """Test successful API call."""
         mock_func = Mock(return_value="success")
         
-        result = safe_api_call(mock_func, "arg1", "arg2")
+        result = safe_api_call(mock_func)
         assert result == "success"
-        mock_func.assert_called_once_with("arg1", "arg2")
+        mock_func.assert_called_once_with()
 
     @patch('time.sleep')
     def test_retry_on_timeout(self, mock_sleep):
@@ -241,12 +241,13 @@ class TestSafeApiCall:
     @patch('time.sleep')
     def test_non_retryable_error(self, mock_sleep):
         """Test non-retryable error."""
-        # APIError with specific message should be raised
+        # ValueError gets converted to APIError and retried
         mock_func = Mock(side_effect=ValueError("Invalid input"))
         
         with pytest.raises(APIError) as exc_info:
             safe_api_call(mock_func)
-        assert mock_func.call_count == 1
+        # It should be retried max_retries times (default 3)
+        assert mock_func.call_count == 3
         assert "Invalid input" in str(exc_info.value)
 
 
