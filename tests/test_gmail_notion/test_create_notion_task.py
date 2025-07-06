@@ -155,7 +155,7 @@ def test_handler_401_error(mock_post):
     result = handler(pd)
     assert "success" not in result
     assert "error" in result
-    assert "error" in result  # Generic error for security
+    assert "Authentication failed" in result["error"]
 
 
 @unittest.mock.patch("requests.post")
@@ -179,7 +179,7 @@ def test_handler_404_error(mock_post):
     result = handler(pd)
     assert "success" not in result
     assert "error" in result
-    assert "error" in result  # Generic error for security
+    assert "Resource not found" in result["error"]
 
 
 @unittest.mock.patch("requests.post")

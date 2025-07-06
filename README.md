@@ -194,6 +194,66 @@ This integration automates the process of creating Notion tasks from Gmail email
 - API request handling and error management
 - Data validation and transformation
 
+### Reliability & Developer Experience Utilities
+
+The project includes enterprise-grade utilities for enhanced reliability and debugging:
+
+#### Retry Manager (`retry_manager.py`)
+
+Provides robust retry logic with exponential backoff for external API calls:
+
+- **Service-specific retry policies**: Notion (5 retries), Gmail (3 retries), OpenAI (4 retries), Google Calendar (3 retries)
+- **Exponential backoff with jitter**: Prevents thundering herd problems
+- **Configurable retry conditions**: Customize which exceptions trigger retries
+- **Request ID tracking**: Correlate retries across function calls
+
+```python
+from src.utils.retry_manager import with_retry
+
+@with_retry(service='notion')
+def create_notion_page(data):
+    # API call with automatic retry logic
+    return requests.post(url, json=data)
+```
+
+#### Error Enrichment (`error_enrichment.py`)
+
+Enriches errors with context and provides user-friendly messages:
+
+- **Pattern-based error matching**: Automatically categorizes common API errors
+- **Service-specific error handling**: Tailored messages for different services
+- **Context preservation**: Maintains original error details for debugging
+- **User-friendly formatting**: Converts technical errors to actionable messages
+
+```python
+from src.utils.error_enrichment import enrich_error
+
+try:
+    api_call()
+except Exception as e:
+    enriched = enrich_error(e, 'notion', {'operation': 'create_page'})
+    logger.error(enriched.user_message)
+```
+
+#### Structured Logger (`structured_logger.py`)
+
+Provides JSON-structured logging with request tracking and context propagation:
+
+- **Request ID correlation**: Track operations across function boundaries
+- **JSON structured output**: Easy parsing for log aggregation systems
+- **Context propagation**: Thread-safe context storage and retrieval
+- **Performance timing**: Built-in operation duration tracking
+- **Pipedream integration**: Specialized logging for Pipedream workflows
+
+```python
+from src.utils.structured_logger import get_pipedream_logger
+
+logger = get_pipedream_logger('workflow_name')
+with logger.request_context() as request_id:
+    logger.info("Processing started", user_id="123")
+    # All logs in this context include the request_id
+```
+
 ## Usage
 
 ### Notion ↔ Google Calendar Integration
