@@ -7,6 +7,7 @@ task retrieval, and event creation.
 
 import logging
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from src.config.constants import (NOTION_API_BASE_URL, NOTION_DATABASES_URL)
 
 import requests
 from requests.exceptions import HTTPError, RequestException
@@ -21,8 +22,6 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # --- Configuration ---
-NOTION_API_BASE_URL = "https://api.notion.com/v1"
-NOTION_DATABASES_URL = f"{NOTION_API_BASE_URL}/databases"
 CALENDAR_API_BASE_URL = "https://www.googleapis.com/calendar/v3"
 CALENDAR_EVENTS_URL = f"{CALENDAR_API_BASE_URL}/calendars/primary/events"
 

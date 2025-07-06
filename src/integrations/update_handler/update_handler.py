@@ -7,6 +7,7 @@ managing authentication, task updates, and event synchronization.
 
 import logging
 from typing import Any, Dict, Optional, TYPE_CHECKING
+from src.config.constants import (NOTION_API_BASE_URL, NOTION_PAGES_URL)
 
 import requests
 
@@ -20,8 +21,6 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # --- Configuration ---
-NOTION_API_BASE_URL = "https://api.notion.com/v1"
-NOTION_PAGES_URL = f"{NOTION_API_BASE_URL}/pages"
 CALENDAR_API_BASE_URL = "https://www.googleapis.com/calendar/v3"
 CALENDAR_EVENTS_URL = f"{CALENDAR_API_BASE_URL}/calendars/primary/events"
 

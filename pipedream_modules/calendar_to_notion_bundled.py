@@ -1,4 +1,64 @@
 """
+Google Calendar to Notion Sync
+Generated: 2025-07-05 17:21:23
+Bundled for Pipedream deployment
+"""
+
+import logging
+import json
+import requests
+from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+from requests.exceptions import HTTPError, RequestException
+
+# Configure logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# === EMBEDDED DEPENDENCIES ===
+# === CONSTANTS ===
+NOTION_API_BASE_URL = "https://api.notion.com/v1"
+NOTION_PAGES_URL = f"{NOTION_API_BASE_URL}/pages"
+
+# === UTILITY FUNCTIONS ===
+# From src/utils/common_utils.py
+def safe_get(obj, path, default=None):
+    """
+    Safely get a value from a nested dictionary or list using a path.
+    Args:
+        obj: Dictionary or list to get value from
+        path: List of keys/indices or a single key/index
+        default: Value to return if path is not found
+    Returns:
+        Value at path or default if not found
+    """
+    if obj is None:
+        return default
+    if path is None or path == []:
+        return default
+    if not isinstance(path, list):
+        path = [path]
+    current = obj
+    try:
+        for key in path:
+            if isinstance(current, dict):
+                current = current.get(key, default)
+            elif isinstance(current, list) and isinstance(key, int):
+                if 0 <= key < len(current):
+                    current = current[key]
+                else:
+                    return default
+            else:
+                return default
+        return current
+    except Exception:
+        return default
+
+
+
+
+# === MAIN MODULE ===
+"""
 Calendar to Notion Integration
 
 This module syncs calendar events to Notion, handling authentication,
@@ -7,14 +67,9 @@ event retrieval, and task creation.
 
 import logging
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
-from src.config.constants import (NOTION_API_BASE_URL, NOTION_PAGES_URL)
 
 import requests
 
-from src.utils.common_utils import safe_get
-
-if TYPE_CHECKING:
-    import pipedream
 
 # Configure basic logging for Pipedream
 logger = logging.getLogger()
@@ -245,3 +300,7 @@ def handler(pd: "pipedream") -> Dict[str, Any]:
         return {
             "error": str(e)
         }
+
+# === PIPEDREAM HANDLER ===
+# The handler function is the entry point for Pipedream
+# Usage: return handler(pd)

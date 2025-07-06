@@ -8,6 +8,7 @@ including authentication, data formatting, and API interactions.
 import logging
 import re
 from typing import Any, Dict, List, Optional
+from src.config.constants import (NOTION_API_BASE_URL, NOTION_PAGES_URL, NOTION_BLOCKS_URL, NOTION_DATABASES_URL)
 
 import requests
 
@@ -16,10 +17,6 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # --- Configuration ---
-NOTION_API_BASE_URL = "https://api.notion.com/v1"
-NOTION_PAGES_URL = f"{NOTION_API_BASE_URL}/pages"
-NOTION_DATABASES_URL = f"{NOTION_API_BASE_URL}/databases"
-NOTION_BLOCKS_URL = f"{NOTION_API_BASE_URL}/blocks"
 
 
 def format_notion_properties(properties: Dict[str, Any]) -> Dict[str, Any]:
