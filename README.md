@@ -6,18 +6,35 @@ This repository contains a collection of Pipedream workflows and integrations fo
 
 ```
 .
-├── src/                    # Source code
-│   ├── utils/             # Shared utility functions
-│   │   ├── common_utils.py # Common data access and processing utilities
-│   │   └── notion_utils.py # Notion-specific utility functions
-│   └── integrations/      # Service integration modules
-│       ├── notion_gcal/   # Notion ↔ Google Calendar integration
-│       └── gmail_notion/  # Gmail → Notion integration
-├── tests/                 # Test suite
-├── .github/              # GitHub configuration
-│   ├── workflows/        # CI/CD workflows
-│   └── ISSUE_TEMPLATE/   # Issue templates
-└── docs/                 # Documentation
+├── pipedream/                    # Pipedream-specific configurations
+│   ├── workflows/               # Workflow definitions (.js files)
+│   ├── components/              # Reusable components
+│   │   ├── actions/            # Action components
+│   │   ├── sources/            # Source components
+│   │   └── common/             # Shared utilities
+│   ├── sources/                # Event sources
+│   └── actions/                # Custom actions
+├── library/                     # Python library code
+│   ├── src/                    # Source code
+│   │   ├── config/             # Configuration files
+│   │   ├── utils/              # Shared utility functions
+│   │   │   ├── common_utils.py # Common data access and processing utilities
+│   │   │   ├── notion_utils.py # Notion-specific utility functions
+│   │   │   ├── retry_manager.py # Retry logic with exponential backoff
+│   │   │   ├── error_enrichment.py # User-friendly error messages
+│   │   │   └── structured_logger.py # JSON structured logging
+│   │   └── integrations/       # Service integration modules
+│   │       ├── notion_gcal/    # Notion ↔ Google Calendar integration
+│   │       └── gmail_notion/   # Gmail → Notion integration
+│   ├── tests/                  # Test suite
+│   └── docs/                   # Library documentation
+├── deployment/                  # Deployment scripts and configs
+│   ├── scripts/                # Bundling and deployment scripts
+│   └── templates/              # Template files
+├── docs/                       # General documentation
+└── .github/                    # GitHub configuration
+    ├── workflows/              # CI/CD workflows
+    └── ISSUE_TEMPLATE/         # Issue templates
 ```
 
 ## Development Setup
@@ -38,6 +55,7 @@ This repository contains a collection of Pipedream workflows and integrations fo
 
 2. Install dependencies:
    ```bash
+   cd library
    make install
    ```
 
@@ -64,6 +82,7 @@ The project uses several tools to maintain code quality:
 Use the provided Makefile commands:
 
 ```bash
+cd library
 make install    # Install dependencies and pre-commit hooks
 make test      # Run tests
 make lint      # Run all linters
@@ -77,11 +96,13 @@ make clean     # Clean up cache and build files
 
 Run the complete test suite:
 ```bash
+cd library
 make test
 ```
 
 Run tests with coverage:
 ```bash
+cd library
 pytest --cov=src --cov-report=term-missing
 ```
 
@@ -115,11 +136,13 @@ We welcome contributions! Please follow these steps:
 2. Create a feature branch
 3. Install development dependencies:
    ```bash
+   cd library
    make install
    ```
 4. Make your changes
 5. Run tests and linters:
    ```bash
+   cd library
    make test
    make lint
    ```
@@ -208,7 +231,7 @@ Provides robust retry logic with exponential backoff for external API calls:
 - **Request ID tracking**: Correlate retries across function calls
 
 ```python
-from src.utils.retry_manager import with_retry
+from library.src.utils.retry_manager import with_retry
 
 @with_retry(service='notion')
 def create_notion_page(data):
@@ -226,7 +249,7 @@ Enriches errors with context and provides user-friendly messages:
 - **User-friendly formatting**: Converts technical errors to actionable messages
 
 ```python
-from src.utils.error_enrichment import enrich_error
+from library.src.utils.error_enrichment import enrich_error
 
 try:
     api_call()
@@ -246,7 +269,7 @@ Provides JSON-structured logging with request tracking and context propagation:
 - **Pipedream integration**: Specialized logging for Pipedream workflows
 
 ```python
-from src.utils.structured_logger import get_pipedream_logger
+from library.src.utils.structured_logger import get_pipedream_logger
 
 logger = get_pipedream_logger('workflow_name')
 with logger.request_context() as request_id:
@@ -254,21 +277,53 @@ with logger.request_context() as request_id:
     # All logs in this context include the request_id
 ```
 
+## Deployment
+
+### Bundling Python Modules
+
+This repository uses a bundling system to create self-contained Python modules for Pipedream deployment:
+
+```bash
+# Bundle all modules
+cd deployment/scripts
+python bundle_for_pipedream_v2.py --all
+
+# Bundle specific module
+python bundle_for_pipedream_v2.py --module gmail_to_notion
+```
+
+The bundler creates ready-to-deploy Python files in `deployment/scripts/pipedream_modules/` that include all dependencies.
+
+### Deploying to Pipedream
+
+1. **Using Pipedream CLI**:
+   ```bash
+   # Deploy a workflow
+   pd deploy pipedream/workflows/gmail-to-notion.js
+   ```
+
+2. **Using Pipedream Web Interface**:
+   - Copy the bundled module content from `deployment/scripts/pipedream_modules/`
+   - Paste into a new Python code step in your workflow
+   - Configure the workflow inputs and triggers
+
+See [deployment/DEPLOYMENT_GUIDE.md](deployment/DEPLOYMENT_GUIDE.md) for detailed deployment instructions.
+
 ## Usage
 
 ### Notion ↔ Google Calendar Integration
 
 1. Set up a Pipedream workflow with a Notion trigger
-2. Add the `task_to_event.py` step to create Calendar events
-3. Configure the `update_handler.py` step to handle updates
-4. Add the `calendar_to_notion.py` step to process Calendar events
+2. Bundle the required modules: `notion_to_gcal`, `calendar_to_notion`
+3. Deploy the workflow using the bundled JavaScript files in `pipedream/workflows/`
+4. Configure authentication and database IDs in the workflow settings
 
 ### Gmail → Notion Integration
 
 1. Set up a Pipedream workflow with a Gmail trigger
-2. Add the `fetch_emails.py` step to get emails
-3. Configure the `create_notion_task.py` step to create Notion tasks
-4. Add the `label_processed.py` step to manage email labels
+2. Bundle the `gmail_to_notion` module
+3. Deploy the workflow using `pipedream/workflows/gmail-to-notion.js`
+4. Configure Gmail query parameters and Notion database ID
 
 ## Code Quality & Repo Hygiene
 

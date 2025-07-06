@@ -2,40 +2,43 @@
   "modules": {
     "notion_to_gcal": {
       "name": "Notion to Google Calendar Sync",
-      "entry": "src/integrations/notion_gcal/task_to_event.py",
+      "entry": "../../library/src/integrations/notion_gcal/task_to_event.py",
       "dependencies": [
-        "src/utils/common_utils.py",
-        "src/utils/notion_utils.py",
-        "src/config/constants.py"
+        "../../library/src/utils/common_utils.py",
+        "../../library/src/utils/notion_utils.py",
+        "../../library/src/config/constants.py"
       ],
       "output": "notion_to_gcal_bundled.py"
     },
     "gmail_to_notion": {
       "name": "Gmail to Notion Task Creator",
-      "entry": "src/integrations/gmail_notion/create_notion_task.py",
+      "entry": "../../library/src/integrations/gmail_notion/create_notion_task.py",
       "dependencies": [
-        "src/utils/common_utils.py",
-        "src/utils/validation.py",
-        "src/utils/error_handling.py",
-        "src/config/constants.py"
+        "../../library/src/utils/common_utils.py",
+        "../../library/src/utils/validation.py",
+        "../../library/src/utils/error_handling.py",
+        "../../library/src/utils/retry_manager.py",
+        "../../library/src/utils/error_enrichment.py",
+        "../../library/src/utils/structured_logger.py",
+        "../../library/src/config/constants.py"
       ],
       "output": "gmail_to_notion_bundled.py"
     },
     "calendar_to_notion": {
       "name": "Google Calendar to Notion Sync",
-      "entry": "src/integrations/calendar_to_notion/calendar_to_notion.py",
+      "entry": "../../library/src/integrations/calendar_to_notion/calendar_to_notion.py",
       "dependencies": [
-        "src/utils/common_utils.py",
-        "src/config/constants.py"
+        "../../library/src/utils/common_utils.py",
+        "../../library/src/config/constants.py"
       ],
       "output": "calendar_to_notion_bundled.py"
     },
     "notion_update_handler": {
       "name": "Notion Update Handler",
-      "entry": "src/integrations/update_handler/update_handler.py",
+      "entry": "../../library/src/integrations/update_handler/update_handler.py",
       "dependencies": [
-        "src/utils/common_utils.py",
-        "src/config/constants.py"
+        "../../library/src/utils/common_utils.py",
+        "../../library/src/config/constants.py"
       ],
       "output": "notion_update_handler_bundled.py"
     }

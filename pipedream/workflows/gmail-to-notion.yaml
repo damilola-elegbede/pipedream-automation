@@ -1,0 +1,141 @@
+org_id: o_W7IRJXz
+project_id: proj_qzsZPn
+
+steps:
+  # Authentication steps
+  - namespace: gmail_auth
+    props:
+      gmail:
+        authProvisionId: apn_yghMQ7D
+      __configurableProps:
+        - app: gmail
+          name: gmail
+          type: app
+          authType: oauth
+          appId: app_OQYhq7
+
+  - namespace: notion_auth
+    props:
+      notion:
+        authProvisionId: apn_eahKrgW
+      __configurableProps:
+        - app: notion
+          name: notion
+          type: app
+          authType: oauth
+          appId: app_X7Lhxr
+
+  # Step 1: Fetch emails from Gmail
+  - namespace: fetch_emails
+    props:
+      code: |
+        # Import the bundled Gmail to Notion module
+        exec(open('./bundled/gmail_to_notion_bundled.py').read())
+        
+        # Prepare Pipedream context for email fetching
+        pd_context = {
+          "inputs": {
+            "gmail": {
+              "$auth": steps.gmail_auth.gmail,
+              "query": "is:unread label:action-required",
+              "max_results": 10
+            }
+          },
+          "steps": steps
+        }
+        
+        # Execute fetch_emails function
+        result = fetch_emails(pd_context)
+        
+        # Export results for next step
+        return {
+          "emails": result.get("emails", []),
+          "count": len(result.get("emails", [])),
+          "timestamp": result.get("timestamp")
+        }
+
+  # Step 2: Create Notion tasks from fetched emails
+  - namespace: create_notion_tasks
+    props:
+      code: |
+        # Import the bundled Gmail to Notion module
+        exec(open('./bundled/gmail_to_notion_bundled.py').read())
+        
+        # Get emails from previous step
+        emails = steps.fetch_emails.emails
+        
+        if not emails:
+          return {"message": "No emails to process", "tasks_created": 0}
+        
+        # Prepare Pipedream context for task creation
+        pd_context = {
+          "inputs": {
+            "notion": {
+              "$auth": steps.notion_auth.notion,
+              "database_id": "YOUR_NOTION_DATABASE_ID"  # TODO: Replace with actual database ID
+            },
+            "emails": emails
+          },
+          "steps": steps
+        }
+        
+        # Execute create_notion_task function
+        result = create_notion_task(pd_context)
+        
+        # Export results for next step
+        return {
+          "tasks_created": result.get("tasks_created", 0),
+          "processed_emails": result.get("processed_emails", []),
+          "notion_pages": result.get("notion_pages", []),
+          "timestamp": result.get("timestamp")
+        }
+
+  # Step 3: Label processed emails in Gmail
+  - namespace: label_processed
+    props:
+      code: |
+        # Import the bundled Gmail to Notion module
+        exec(open('./bundled/gmail_to_notion_bundled.py').read())
+        
+        # Get processed emails from previous step
+        processed_emails = steps.create_notion_tasks.processed_emails
+        
+        if not processed_emails:
+          return {"message": "No emails to label", "labeled_count": 0}
+        
+        # Prepare Pipedream context for labeling
+        pd_context = {
+          "inputs": {
+            "gmail": {
+              "$auth": steps.gmail_auth.gmail,
+              "label_name": "processed"
+            },
+            "processed_emails": processed_emails
+          },
+          "steps": steps
+        }
+        
+        # Execute label_processed function
+        result = label_processed(pd_context)
+        
+        # Export final results
+        return {
+          "labeled_count": result.get("labeled_count", 0),
+          "workflow_summary": {
+            "emails_fetched": steps.fetch_emails.count,
+            "tasks_created": steps.create_notion_tasks.tasks_created,
+            "emails_labeled": result.get("labeled_count", 0),
+            "timestamp": result.get("timestamp")
+          }
+        }
+
+triggers:
+  - props:
+      timer:
+        cron: null
+        intervalSeconds: 900
+        timezone: UTC
+
+settings:
+  name: Gmail to Notion
+  auto_deploy: true

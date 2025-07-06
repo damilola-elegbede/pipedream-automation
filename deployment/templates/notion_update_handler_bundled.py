@@ -1,0 +1,230 @@
+"""
+Notion Update Handler
+Generated: 2025-07-05 17:21:23
+Bundled for Pipedream deployment
+"""
+
+import logging
+import json
+import requests
+from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+from requests.exceptions import HTTPError, RequestException
+
+# Configure logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# === EMBEDDED DEPENDENCIES ===
+# === CONSTANTS ===
+NOTION_API_BASE_URL = "https://api.notion.com/v1"
+NOTION_PAGES_URL = f"{NOTION_API_BASE_URL}/pages"
+
+# === UTILITY FUNCTIONS ===
+# From src/utils/common_utils.py
+def safe_get(obj, path, default=None):
+    """
+    Safely get a value from a nested dictionary or list using a path.
+    Args:
+        obj: Dictionary or list to get value from
+        path: List of keys/indices or a single key/index
+        default: Value to return if path is not found
+    Returns:
+        Value at path or default if not found
+    """
+    if obj is None:
+        return default
+    if path is None or path == []:
+        return default
+    if not isinstance(path, list):
+        path = [path]
+    current = obj
+    try:
+        for key in path:
+            if isinstance(current, dict):
+                current = current.get(key, default)
+            elif isinstance(current, list) and isinstance(key, int):
+                if 0 <= key < len(current):
+                    current = current[key]
+                else:
+                    return default
+            else:
+                return default
+        return current
+    except Exception:
+        return default
+
+
+
+
+# === MAIN MODULE ===
+"""
+Update Handler
+
+This module handles updates to Notion tasks and syncs them to Google Calendar,
+managing authentication, task updates, and event synchronization.
+"""
+
+import logging
+from typing import Any, Dict, Optional, TYPE_CHECKING
+
+import requests
+
+
+# Configure basic logging for Pipedream
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# --- Configuration ---
+CALENDAR_API_BASE_URL = "https://www.googleapis.com/calendar/v3"
+CALENDAR_EVENTS_URL = f"{CALENDAR_API_BASE_URL}/calendars/primary/events"
+
+
+def get_notion_page(token: str, page_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Get Notion page details.
+
+    Args:
+        token: Notion API access token
+        page_id: Notion page ID
+
+    Returns:
+        Page data or None if error
+    """
+    try:
+        response = requests.get(
+            f"{NOTION_PAGES_URL}/{page_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Notion-Version": "2022-06-28"
+            }
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Error getting Notion page: {e}")
+        return None
+
+
+def build_calendar_event(page: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build calendar event from Notion page.
+
+    Args:
+        page: Notion page data
+
+    Returns:
+        Calendar event data
+    """
+    properties = page.get("properties", {})
+    name = properties.get("Name", {}).get("title", [{}])[0].get("text", {}).get("content", "Untitled Task")
+    due_date = properties.get("Due Date", {}).get("date", {}).get("start")
+    description = properties.get("Description", {}).get("rich_text", [{}])[0].get("text", {}).get("content", "")
+
+    event = {
+        "summary": name,
+        "description": description
+    }
+
+    if due_date:
+        event["start"] = {
+            "dateTime": due_date,
+            "timeZone": "UTC"
+        }
+        event["end"] = {
+            "dateTime": due_date,
+            "timeZone": "UTC"
+        }
+
+    return event
+
+
+def create_calendar_event(token: str, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Create event in Google Calendar.
+
+    Args:
+        token: Google Calendar API access token
+        event: Event data
+
+    Returns:
+        Created event data or None if error
+    """
+    try:
+        response = requests.post(
+            CALENDAR_EVENTS_URL,
+            headers={"Authorization": f"Bearer {token}"},
+            json=event
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Error creating calendar event: {e}")
+        return None
+
+
+def handler(pd: "pipedream") -> Dict[str, Any]:
+    """
+    Handle Notion task updates and sync to Google Calendar.
+
+    Args:
+        pd: The Pipedream context object
+
+    Returns:
+        Dictionary containing sync results and any errors
+    """
+    try:
+        # Get Notion OAuth Token
+        notion_token = safe_get(
+            pd.inputs,
+            ["notion", "$auth", "oauth_access_token"]
+        )
+        if not notion_token:
+            raise Exception(
+                "Notion account not connected or input name is not 'notion'. "
+                "Please connect a Notion account."
+            )
+
+        # Get Google Calendar OAuth Token
+        calendar_token = safe_get(
+            pd.inputs,
+            ["calendar", "$auth", "oauth_access_token"]
+        )
+        if not calendar_token:
+            raise Exception(
+                "Google Calendar account not connected or input name is not "
+                "'calendar'. Please connect a Google Calendar account."
+            )
+
+        # Get updated page
+        page_id = pd.inputs.get("page_id")
+        if not page_id:
+            raise Exception("No page ID provided")
+
+        page = get_notion_page(notion_token, page_id)
+        if not page:
+            raise Exception("Failed to get Notion page")
+
+        # Create calendar event
+        event = build_calendar_event(page)
+        created_event = create_calendar_event(calendar_token, event)
+        if not created_event:
+            raise Exception("Failed to create calendar event")
+
+        return {
+            "message": "Successfully synced task to calendar",
+            "event": {
+                "title": event["summary"],
+                "url": created_event.get("htmlLink")
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error handling update: {e}")
+        return {
+            "error": str(e)
+        }
+
+# === PIPEDREAM HANDLER ===
+# The handler function is the entry point for Pipedream
+# Usage: return handler(pd)
