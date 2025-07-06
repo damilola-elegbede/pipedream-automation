@@ -16,13 +16,15 @@ import requests
 from requests.exceptions import HTTPError, RequestException
 
 from src.utils.common_utils import safe_get
+from src.utils.retry_manager import with_retry
+from src.utils.error_enrichment import enrich_error, format_error
+from src.utils.structured_logger import get_pipedream_logger
 
 if TYPE_CHECKING:
     import pipedream
 
-# Configure basic logging for Pipedream
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+# Configure structured logging for Pipedream
+logger = get_pipedream_logger('gmail_email_fetcher')
 
 # --- Configuration ---
 GMAIL_API_BASE_URL = "https://gmail.googleapis.com/gmail/v1/users/me"
@@ -115,6 +117,7 @@ def get_body_parts(message: Dict[str, Any]) -> Tuple[str, str]:
     return plain_text or "", html_content or ""
 
 
+@with_retry(service='gmail')
 def fetch_messages(token: str) -> List[Dict[str, Any]]:
     """
     Fetch list of messages from Gmail API.
@@ -126,18 +129,25 @@ def fetch_messages(token: str) -> List[Dict[str, Any]]:
         List of message metadata
     """
     try:
+        logger.log_api_call('gmail', f'/gmail/v1/users/me/messages', 'GET',
+                           max_results=MAX_RESULTS)
+        
         response = requests.get(
             f"{GMAIL_API_BASE_URL}/messages?maxResults={MAX_RESULTS}",
             headers={"Authorization": f"Bearer {token}"}
         )
         response.raise_for_status()
+        
+        logger.log_api_response('gmail', response.status_code, 0.0)
         return response.json().get("messages", [])
 
     except RequestException as e:
-        logger.error(f"Error fetching messages: {e}")
+        enriched_error = enrich_error(e, service='gmail', operation='fetch_messages')
+        logger.log_error_with_context(enriched_error, operation='fetch_messages')
         return []
 
 
+@with_retry(service='gmail')
 def fetch_message_details(token: str, message_id: str) -> Optional[Dict[str, Any]]:
     """
     Fetch detailed message data from Gmail API.
@@ -150,15 +160,22 @@ def fetch_message_details(token: str, message_id: str) -> Optional[Dict[str, Any
         Message data if successful, None otherwise
     """
     try:
+        logger.log_api_call('gmail', f'/gmail/v1/users/me/messages/{message_id}', 'GET',
+                           message_id=message_id)
+        
         response = requests.get(
             f"{GMAIL_API_BASE_URL}/messages/{message_id}",
             headers={"Authorization": f"Bearer {token}"}
         )
         response.raise_for_status()
+        
+        logger.log_api_response('gmail', response.status_code, 0.0)
         return response.json()
 
     except RequestException as e:
-        logger.error(f"Error fetching message {message_id}: {e}")
+        enriched_error = enrich_error(e, service='gmail', operation='fetch_message_details',
+                                    message_id=message_id)
+        logger.log_error_with_context(enriched_error, operation='fetch_message_details')
         return None
 
 
@@ -214,33 +231,35 @@ def handler(pd: "pipedream") -> List[Dict[str, Any]]:
     Returns:
         List of processed email data
     """
-    try:
-        token = safe_get(pd.inputs, ["gmail", "$auth", "oauth_access_token"])
-        if not token:
-            raise Exception(
-                "Gmail account not connected or input name is not 'gmail'. "
-                "Please connect a Gmail account."
+    with logger.step_context('fetch_gmail_emails'):
+        try:
+            token = safe_get(pd.inputs, ["gmail", "$auth", "oauth_access_token"])
+            if not token:
+                raise Exception(
+                    "Gmail account not connected or input name is not 'gmail'. "
+                    "Please connect a Gmail account."
+                )
+
+            query = pd.inputs.get("query", "in:inbox")
+            max_results = pd.inputs.get("max_results", 10)
+
+            response = requests.get(
+                GMAIL_MESSAGES_URL,
+                headers={"Authorization": f"Bearer {token}"},
+                params={"q": query, "maxResults": max_results}
             )
+            response.raise_for_status()
+            messages_data = response.json()
 
-        query = pd.inputs.get("query", "in:inbox")
-        max_results = pd.inputs.get("max_results", 10)
+            processed_emails = []
+            for message in messages_data.get("messages", []):
+                processed = process_message(token, message)
+                if processed:
+                    processed_emails.append(processed)
 
-        response = requests.get(
-            GMAIL_MESSAGES_URL,
-            headers={"Authorization": f"Bearer {token}"},
-            params={"q": query, "maxResults": max_results}
-        )
-        response.raise_for_status()
-        messages_data = response.json()
+            return processed_emails
 
-        processed_emails = []
-        for message in messages_data.get("messages", []):
-            processed = process_message(token, message)
-            if processed:
-                processed_emails.append(processed)
-
-        return processed_emails
-
-    except Exception as e:
-        logger.error(f"Error fetching emails: {e}")
-        return []
+        except Exception as e:
+            enriched_error = enrich_error(e, service='gmail', operation='fetch_emails')
+            logger.log_error_with_context(enriched_error, operation='handler_main')
+            return []

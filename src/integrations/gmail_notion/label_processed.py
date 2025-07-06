@@ -17,13 +17,15 @@ import requests
 from requests.exceptions import HTTPError, RequestException
 
 from src.utils.common_utils import safe_get
+from src.utils.retry_manager import with_retry
+from src.utils.error_enrichment import enrich_error, format_error
+from src.utils.structured_logger import get_pipedream_logger
 
 if TYPE_CHECKING:
     import pipedream
 
-# Configure basic logging for Pipedream
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+# Configure structured logging for Pipedream
+logger = get_pipedream_logger('gmail_label_processor')
 
 # --- Configuration ---
 PREVIOUS_STEP_NAME = "notion"
@@ -55,6 +57,7 @@ NO_LABEL_ERROR_MSG = (
 )
 
 
+@with_retry(service='gmail')
 def get_label_id(
     service_headers: Dict[str, str],
     label_name: str
@@ -71,8 +74,11 @@ def get_label_id(
     """
     logger.info(f"Attempting to find Label ID for: '{label_name}'")
     try:
+        logger.log_api_call('gmail', '/gmail/v1/users/me/labels', 'GET', label_name=label_name)
         response = requests.get(GMAIL_LABELS_URL, headers=service_headers)
         response.raise_for_status()
+        logger.log_api_response('gmail', response.status_code, 0.0)
+        
         labels_data = response.json()
         labels = labels_data.get("labels", [])
         for label in labels:
@@ -85,10 +91,12 @@ def get_label_id(
         )
         return None
     except RequestException as e:
-        logger.error(f"Error fetching labels: {e}")
+        enriched_error = enrich_error(e, service='gmail', operation='get_label_id', label_name=label_name)
+        logger.log_error_with_context(enriched_error, operation='get_label_id')
         return None
     except Exception as e:
-        logger.error(f"An unexpected error occurred fetching label ID: {e}")
+        enriched_error = enrich_error(e, service='gmail', operation='get_label_id', label_name=label_name)
+        logger.log_error_with_context(enriched_error, operation='get_label_id')
         return None
 
 
@@ -154,6 +162,7 @@ def extract_message_ids(
     return message_ids
 
 
+@with_retry(service='gmail')
 def add_label_to_message(
     headers: Dict[str, str],
     msg_id: str,
@@ -175,13 +184,15 @@ def add_label_to_message(
     modify_url = f"{GMAIL_MODIFY_URL}/{msg_id}/modify"
     request_body = {"addLabelIds": [label_id]}
     try:
-        logger.info("Sending modify request to Gmail API...")
+        logger.log_api_call('gmail', f'/gmail/v1/users/me/messages/{msg_id}/modify', 'POST', 
+                           message_id=msg_id, label_id=label_id)
         response = requests.post(
             modify_url,
             headers=headers,
             json=request_body
         )
         response.raise_for_status()
+        logger.log_api_response('gmail', response.status_code, 0.0)
         logger.info(f"Successfully added label to message ID: {msg_id}")
         return True, None
     except HTTPError as http_err:

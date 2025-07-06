@@ -262,7 +262,7 @@ def test_handler_401_error(mock_post):
     result = handler(pd)
     assert "success" not in result
     assert "error" in result
-    assert "Invalid calendar authentication" in result["error"]
+    assert "Authentication failed" in result["error"]
 
 
 @unittest.mock.patch("requests.post")
@@ -287,7 +287,7 @@ def test_handler_404_error(mock_post):
     result = handler(pd)
     assert "success" not in result
     assert "error" in result
-    assert "Calendar not found" in result["error"]
+    assert "Resource not found" in result["error"]
 
 
 @unittest.mock.patch("requests.post")
