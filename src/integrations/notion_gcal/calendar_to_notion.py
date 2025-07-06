@@ -13,12 +13,14 @@ import logging
 import re
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
+from src.utils.structured_logger import get_pipedream_logger
+from src.utils.error_enrichment import enrich_error
+
 if TYPE_CHECKING:
     import pipedream
 
-# Configure basic logging for Pipedream
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+# Configure structured logging for Pipedream
+logger = get_pipedream_logger('gcal_to_notion_event_handler')
 
 
 def extract_notion_page_id(url: str) -> Optional[str]:
@@ -78,14 +80,17 @@ def handler(pd: "pipedream") -> Dict[str, Any]:
     Returns:
         Dictionary with task details for Notion
     """
-    # UNTESTED: event extraction logic for steps, event, dict
-    event = None
-    if hasattr(pd, "steps") and isinstance(pd.steps, dict):
-        event = pd.steps.get("trigger", {}).get("event")
-    elif hasattr(pd, "event"):
-        event = pd.event
-    elif isinstance(pd, dict):
-        event = pd.get("event")
+    with logger.step_context('process_gcal_event_for_notion'):
+        # UNTESTED: event extraction logic for steps, event, dict
+        event = None
+        if hasattr(pd, "steps") and isinstance(pd.steps, dict):
+            event = pd.steps.get("trigger", {}).get("event")
+        elif hasattr(pd, "event"):
+            event = pd.event
+        elif isinstance(pd, dict):
+            event = pd.get("event")
+        
+        logger.debug("Event extraction completed", event_found=event is not None)
 
     # Always build the result dict with all expected keys
     summary = event.get("summary", "Untitled Event") if event else "Untitled Event"

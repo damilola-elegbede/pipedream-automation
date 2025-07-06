@@ -14,15 +14,18 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 import requests
 from requests.exceptions import RequestException
 
+from src.utils.retry_manager import with_retry
+from src.utils.error_enrichment import enrich_error, format_error
+from src.utils.structured_logger import get_pipedream_logger
+
 if TYPE_CHECKING:
     import pipedream
 
 from src.utils.notion_utils import extract_notion_task_data
 from src.utils.common_utils import safe_get
 
-# Configure basic logging for Pipedream
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+# Configure structured logging for Pipedream
+logger = get_pipedream_logger('notion_to_gcal_task_converter')
 
 
 def validate_task_data(task: Dict[str, Any]) -> Dict[str, Any]:
@@ -91,6 +94,7 @@ def validate_task_data(task: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+@with_retry(service='google_calendar')
 def create_calendar_event(
     event_data: Dict[str, Any],
     calendar_id: str,
@@ -114,8 +118,18 @@ def create_calendar_event(
         if not event_id
         else f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events/{event_id}"
     )
+    
+    method = 'POST' if not event_id else 'PUT'
+    endpoint = f'/calendar/v3/calendars/{calendar_id}/events'
+    if event_id:
+        endpoint += f'/{event_id}'
 
     try:
+        logger.log_api_call('google_calendar', endpoint, method,
+                           calendar_id=calendar_id,
+                           event_id=event_id,
+                           summary=event_data.get('summary'))
+        
         response = requests.post(
             url,
             headers={
@@ -125,15 +139,15 @@ def create_calendar_event(
             json=event_data,
         )
         response.raise_for_status()
+        
+        logger.log_api_response('google_calendar', response.status_code, 0.0)
         return {"success": response.json()}
     except RequestException as e:
-        error_msg = str(e)
-        if "401" in error_msg:
-            return {"error": "Invalid calendar authentication"}
-        elif "404" in error_msg:
-            return {"error": "Calendar not found"}
-        else:
-            return {"error": error_msg}
+        enriched_error = enrich_error(e, service='google_calendar', operation='create_event',
+                                    calendar_id=calendar_id, event_id=event_id)
+        formatted_error = format_error(enriched_error.original_error, service='google_calendar')
+        logger.log_error_with_context(enriched_error, operation='create_calendar_event')
+        return {"error": formatted_error}
 
 
 def handler(pd: "pipedream") -> Dict[str, Any]:
@@ -146,10 +160,12 @@ def handler(pd: "pipedream") -> Dict[str, Any]:
     Returns:
         Dictionary with success and error information
     """
-    # Validate required inputs
-    task = pd.get("task")
-    if not task:
-        return {"error": "No task data provided"}
+    with logger.step_context('convert_notion_task_to_gcal_event'):
+        # Validate required inputs
+        task = pd.get("task")
+        if not task:
+            logger.error("No task data provided")
+            return {"error": "No task data provided"}
 
     calendar_auth = pd.get("calendar_auth")
     if not calendar_auth:

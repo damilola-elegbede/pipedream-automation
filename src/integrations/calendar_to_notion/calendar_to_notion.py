@@ -12,19 +12,22 @@ from src.config.constants import (NOTION_API_BASE_URL, NOTION_PAGES_URL)
 import requests
 
 from src.utils.common_utils import safe_get
+from src.utils.retry_manager import with_retry
+from src.utils.error_enrichment import enrich_error, format_error
+from src.utils.structured_logger import get_pipedream_logger
 
 if TYPE_CHECKING:
     import pipedream
 
-# Configure basic logging for Pipedream
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+# Configure structured logging for Pipedream
+logger = get_pipedream_logger('calendar_to_notion_sync')
 
 # --- Configuration ---
 CALENDAR_API_BASE_URL = "https://www.googleapis.com/calendar/v3"
 CALENDAR_EVENTS_URL = f"{CALENDAR_API_BASE_URL}/calendars/primary/events"
 
 
+@with_retry(service='google_calendar')
 def get_calendar_events(
     token: str,
     time_min: str,
@@ -42,6 +45,8 @@ def get_calendar_events(
         List of calendar events
     """
     try:
+        logger.log_api_call('google_calendar', '/calendar/v3/calendars/primary/events', 'GET',
+                           time_min=time_min, time_max=time_max)
         response = requests.get(
             CALENDAR_EVENTS_URL,
             headers={"Authorization": f"Bearer {token}"},
