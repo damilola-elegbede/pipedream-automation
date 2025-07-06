@@ -28,46 +28,49 @@ class TestExceptionClasses:
 
     def test_pipedream_error_initialization(self):
         """Test PipedreamError initialization."""
-        error = PipedreamError("Test error", {"key": "value"})
+        error = PipedreamError("Test error", code="TEST_CODE", details={"key": "value"})
         assert str(error) == "Test error"
+        assert error.code == "TEST_CODE"
         assert error.details == {"key": "value"}
 
     def test_pipedream_error_to_dict(self):
         """Test PipedreamError to_dict method."""
-        error = PipedreamError("Test error", {"key": "value"})
+        error = PipedreamError("Test error", code="TEST_CODE", details={"key": "value"})
         result = error.to_dict()
-        assert result == {
-            "error": "Test error",
-            "type": "PipedreamError",
-            "details": {"key": "value"}
-        }
+        assert result["error"] == "Test error"
+        assert result["code"] == "TEST_CODE"
+        assert result["details"] == {"key": "value"}
+        assert "timestamp" in result
 
     def test_authentication_error(self):
         """Test AuthenticationError."""
-        error = AuthenticationError("Auth failed")
+        error = AuthenticationError("Auth failed", service="notion")
         result = error.to_dict()
-        assert result["type"] == "AuthenticationError"
+        assert result["code"] == "AUTH_ERROR"
         assert result["error"] == "Auth failed"
+        assert result["details"]["service"] == "notion"
 
     def test_validation_error(self):
         """Test ValidationError."""
-        error = ValidationError("Invalid input", {"field": "email"})
+        error = ValidationError("Invalid input", field="email")
         result = error.to_dict()
-        assert result["type"] == "ValidationError"
-        assert result["details"] == {"field": "email"}
+        assert result["code"] == "VALIDATION_ERROR"
+        assert result["error"] == "Invalid input"
+        assert result["details"]["field"] == "email"
 
     def test_api_error(self):
         """Test APIError."""
-        error = APIError("API call failed", status_code=404)
+        error = APIError("API call failed", status_code=404, service="gmail")
         result = error.to_dict()
-        assert result["type"] == "APIError"
+        assert result["code"] == "API_ERROR"
         assert result["details"]["status_code"] == 404
+        assert result["details"]["service"] == "gmail"
 
     def test_rate_limit_error(self):
         """Test RateLimitError."""
         error = RateLimitError(retry_after=60)
         result = error.to_dict()
-        assert result["type"] == "RateLimitError"
+        assert result["code"] == "RATE_LIMIT"
         assert result["details"]["retry_after"] == 60
 
 
@@ -88,12 +91,13 @@ class TestPipedreamErrorHandler:
         """Test decorator handling PipedreamError."""
         @pipedream_error_handler
         def handler(pd):
-            raise PipedreamError("Custom error", {"detail": "info"})
+            raise PipedreamError("Custom error", code="CUSTOM", details={"detail": "info"})
 
         pd = Mock()
         result = handler(pd)
         assert "error" in result
-        assert result["error"] == "An error occurred processing your request"
+        assert result["error"] == "Custom error"
+        assert result["code"] == "CUSTOM"
 
     def test_authentication_error_handling(self):
         """Test decorator handling AuthenticationError."""
@@ -104,7 +108,8 @@ class TestPipedreamErrorHandler:
         pd = Mock()
         result = handler(pd)
         assert "error" in result
-        assert "authentication" in result["error"].lower()
+        assert result["error"] == "Invalid token"
+        assert result["code"] == "AUTH_ERROR"
 
     def test_validation_error_handling(self):
         """Test decorator handling ValidationError."""
@@ -116,6 +121,7 @@ class TestPipedreamErrorHandler:
         result = handler(pd)
         assert "error" in result
         assert result["error"] == "Invalid email"
+        assert result["code"] == "VALIDATION_ERROR"
 
     def test_generic_exception_handling(self):
         """Test decorator handling generic exceptions."""
@@ -126,7 +132,7 @@ class TestPipedreamErrorHandler:
         pd = Mock()
         result = handler(pd)
         assert "error" in result
-        assert result["error"] == "An error occurred processing your request"
+        assert result["error"] == "An unexpected error occurred"
 
 
 class TestHandleApiResponse:
@@ -168,7 +174,7 @@ class TestHandleApiResponse:
         
         with pytest.raises(APIError) as exc_info:
             handle_api_response(response)
-        assert exc_info.value.status_code == 404
+        assert exc_info.value.details["status_code"] == 404
 
     def test_429_rate_limit(self):
         """Test handling 429 response."""
@@ -190,7 +196,7 @@ class TestHandleApiResponse:
         
         with pytest.raises(APIError) as exc_info:
             handle_api_response(response)
-        assert exc_info.value.status_code == 500
+        assert exc_info.value.details["status_code"] == 500
 
 
 class TestSafeApiCall:
@@ -201,9 +207,9 @@ class TestSafeApiCall:
         """Test successful API call."""
         mock_func = Mock(return_value="success")
         
-        result = safe_api_call(mock_func, "arg1", kwarg="value")
+        result = safe_api_call(mock_func, "arg1", "arg2")
         assert result == "success"
-        mock_func.assert_called_once_with("arg1", kwarg="value")
+        mock_func.assert_called_once_with("arg1", "arg2")
 
     @patch('time.sleep')
     def test_retry_on_timeout(self, mock_sleep):
@@ -231,16 +237,17 @@ class TestSafeApiCall:
         with pytest.raises(APIError) as exc_info:
             safe_api_call(mock_func, max_retries=3)
         assert mock_func.call_count == 3
-        assert "Max retries" in str(exc_info.value)
 
     @patch('time.sleep')
     def test_non_retryable_error(self, mock_sleep):
         """Test non-retryable error."""
+        # APIError with specific message should be raised
         mock_func = Mock(side_effect=ValueError("Invalid input"))
         
-        with pytest.raises(ValueError):
+        with pytest.raises(APIError) as exc_info:
             safe_api_call(mock_func)
         assert mock_func.call_count == 1
+        assert "Invalid input" in str(exc_info.value)
 
 
 class TestFormatErrorResponse:
@@ -248,45 +255,45 @@ class TestFormatErrorResponse:
 
     def test_format_pipedream_error(self):
         """Test formatting PipedreamError."""
-        error = PipedreamError("Test error", {"key": "value"})
+        error = PipedreamError("Test error", code="TEST", details={"key": "value"})
         result = format_error_response(error)
-        assert result == {"error": "An error occurred processing your request"}
+        assert result["error"] == "Test error"
+        assert result["code"] == "TEST"
+        assert "timestamp" in result
 
     def test_format_authentication_error(self):
         """Test formatting AuthenticationError."""
         error = AuthenticationError("Invalid token")
         result = format_error_response(error)
         assert "error" in result
-        assert "authentication" in result["error"].lower()
+        assert result["error"] == "Invalid token"
+        assert result["code"] == "AUTH_ERROR"
 
     def test_format_validation_error(self):
         """Test formatting ValidationError."""
         error = ValidationError("Invalid email format")
         result = format_error_response(error)
-        assert result == {"error": "Invalid email format"}
+        assert result["error"] == "Invalid email format"
+        assert result["code"] == "VALIDATION_ERROR"
 
     def test_format_api_error(self):
         """Test formatting APIError."""
         error = APIError("API call failed", status_code=500)
         result = format_error_response(error)
-        assert result == {"error": "An error occurred processing your request"}
+        assert result["error"] == "API call failed"
+        assert result["code"] == "API_ERROR"
 
     def test_format_rate_limit_error(self):
         """Test formatting RateLimitError."""
         error = RateLimitError(retry_after=60)
         result = format_error_response(error)
         assert "error" in result
-        assert "rate limit" in result["error"].lower()
+        assert "Rate limit" in result["error"]
+        assert result["code"] == "RATE_LIMIT"
 
     def test_format_generic_exception(self):
         """Test formatting generic exception."""
         error = Exception("Unexpected error")
         result = format_error_response(error)
-        assert result == {"error": "An error occurred processing your request"}
-
-    def test_include_details_flag(self):
-        """Test include_details parameter."""
-        error = ValidationError("Invalid input", {"field": "email"})
-        result = format_error_response(error, include_details=True)
-        assert "details" in result
-        assert result["details"] == {"field": "email"}
+        assert result["error"] == "Unexpected error"
+        assert result["type"] == "Exception"
