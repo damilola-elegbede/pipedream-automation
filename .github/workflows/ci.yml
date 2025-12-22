@@ -32,7 +32,7 @@ jobs:
         python -m pytest --cov=src --cov-report=term-missing --cov-fail-under=70
 
     - name: Upload coverage reports
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v5
       if: matrix.python-version == '3.12'
       with:
         fail_ci_if_error: false
