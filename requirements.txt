@@ -1,15 +1,10 @@
-pytest==7.4.3
-pytest-cov==4.1.0
-python-dotenv==1.0.0
-requests==2.31.0
-black==23.11.0
-flake8==6.1.0
-mypy==1.7.1
-isort==5.12.0
-pydocstyle==6.3.0
-markdown==3.5.2
-google-api-python-client==2.118.0
-google-auth-httplib2==0.2.0
-google-auth-oauthlib==1.2.0
-notion-client==2.2.1
-beautifulsoup4==4.12.2 
+# Runtime dependencies (used by Pipedream steps)
+requests>=2.32.0
+
+# Testing dependencies
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Development dependencies (optional)
+black>=23.11.0
+isort>=5.12.0
