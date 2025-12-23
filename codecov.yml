@@ -1,0 +1,16 @@
+coverage:
+  status:
+    project:
+      default:
+        target: 60%
+        threshold: 5%
+    patch:
+      default:
+        target: 60%
+        threshold: 10%
+        informational: true
+
+comment:
+  layout: "header, diff, files, footer"
+  behavior: default
+  require_changes: false
