@@ -443,3 +443,442 @@ class TestWaitForLogin:
         result = await syncer.wait_for_login()
 
         assert result is True
+
+
+class TestVerifyCodeUpdate:
+    """Tests for verify_code_update method."""
+
+    @pytest.fixture
+    def mock_config(self):
+        """Create a mock DeployConfig for testing."""
+        return DeployConfig(
+            version="1.0",
+            pipedream_base_url="https://pipedream.com",
+            workflows={
+                "test_workflow": WorkflowConfig(
+                    id="test-workflow-p_abc123",
+                    name="Test Workflow",
+                    steps=[
+                        StepConfig(step_name="step1", script_path="src/steps/step1.py"),
+                    ],
+                )
+            },
+            settings=DeploySettings(
+                step_timeout=60,
+                max_retries=3,
+                autosave_wait=1.0,
+            ),
+            pipedream_username="testuser",
+            pipedream_project_id="proj_test",
+        )
+
+    @pytest.mark.asyncio
+    async def test_verify_code_update_without_page(self, mock_config):
+        """Test verify_code_update returns False when page not initialized."""
+        syncer = PipedreamSyncer(config=mock_config)
+        result = await syncer.verify_code_update("test code", "test_step")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_verify_code_update_with_matching_handler(self, mock_config):
+        """Test verify_code_update returns True when handler functions match."""
+        syncer = PipedreamSyncer(config=mock_config, verbose=True)
+
+        expected_code = "def handler_test_step(pd): pass"
+        mock_page = AsyncMock()
+        mock_page.evaluate = AsyncMock(return_value="def handler_test_step(pd): pass")
+        syncer.page = mock_page
+
+        result = await syncer.verify_code_update(expected_code, "test_step")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_verify_code_update_handler_mismatch(self, mock_config):
+        """Test verify_code_update returns False when handler functions don't match."""
+        syncer = PipedreamSyncer(config=mock_config, verbose=True)
+
+        expected_code = "def handler_expected(pd): pass"
+        mock_page = AsyncMock()
+        mock_page.evaluate = AsyncMock(return_value="def handler_different(pd): pass")
+        syncer.page = mock_page
+
+        result = await syncer.verify_code_update(expected_code, "test_step")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_verify_code_update_empty_actual_code(self, mock_config):
+        """Test verify_code_update returns False when editor is empty."""
+        syncer = PipedreamSyncer(config=mock_config, verbose=True)
+
+        mock_page = AsyncMock()
+        mock_page.evaluate = AsyncMock(return_value="")
+        syncer.page = mock_page
+
+        result = await syncer.verify_code_update("def handler(pd): pass", "test_step")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_verify_code_update_handles_exception(self, mock_config):
+        """Test verify_code_update handles exceptions gracefully."""
+        syncer = PipedreamSyncer(config=mock_config)
+
+        mock_page = AsyncMock()
+        mock_page.evaluate = AsyncMock(side_effect=Exception("Evaluation failed"))
+        syncer.page = mock_page
+
+        result = await syncer.verify_code_update("test code", "test_step")
+        assert result is False
+
+
+class TestWorkflowEditUrl:
+    """Tests for workflow_edit_url function from selectors module."""
+
+    def test_workflow_edit_url_with_username_and_project(self):
+        """Test building URL with username and project ID."""
+        from src.deploy.selectors import workflow_edit_url
+
+        url = workflow_edit_url(
+            base_url="https://pipedream.com",
+            workflow_id="my-workflow-p_xyz789",
+            username="testuser",
+            project_id="proj_abc123",
+        )
+
+        assert "testuser" in url
+        assert "proj_abc123" in url
+        assert "my-workflow-p_xyz789" in url
+        assert "build" in url
+
+    def test_workflow_edit_url_legacy_format(self):
+        """Test building URL without username (legacy format)."""
+        from src.deploy.selectors import workflow_edit_url
+
+        url = workflow_edit_url(
+            base_url="https://pipedream.com",
+            workflow_id="p_xyz789",
+            username="",
+            project_id="",
+        )
+
+        assert "pipedream.com" in url
+        assert "p_xyz789" in url
+        assert "edit" in url
+
+
+class TestSyncStepWithScriptFile:
+    """Tests for sync_step with actual script file handling."""
+
+    @pytest.fixture
+    def mock_config(self):
+        """Create a mock DeployConfig for testing."""
+        return DeployConfig(
+            version="1.0",
+            pipedream_base_url="https://pipedream.com",
+            workflows={
+                "test_workflow": WorkflowConfig(
+                    id="test-p_abc123",
+                    name="Test Workflow",
+                    steps=[
+                        StepConfig(step_name="test_step", script_path="src/steps/test.py"),
+                    ],
+                )
+            },
+            settings=DeploySettings(autosave_wait=0.1),
+            pipedream_username="testuser",
+            pipedream_project_id="proj_test",
+        )
+
+    @pytest.mark.asyncio
+    async def test_sync_step_script_not_found(self, mock_config, tmp_path):
+        """Test sync_step handles missing script file."""
+        syncer = PipedreamSyncer(config=mock_config)
+
+        step = StepConfig(step_name="test", script_path="nonexistent.py")
+        result = await syncer.sync_step("p_abc", step, tmp_path)
+
+        assert result.status == "failed"
+        assert "not found" in result.message.lower() or "error" in result.message.lower()
+
+
+class TestLogLevels:
+    """Tests for log method with different levels."""
+
+    @pytest.fixture
+    def mock_config(self):
+        """Create a mock DeployConfig for testing."""
+        return DeployConfig(
+            version="1.0",
+            pipedream_base_url="https://pipedream.com",
+            workflows={},
+            settings=DeploySettings(),
+        )
+
+    def test_log_success_level(self, mock_config, capsys):
+        """Test logging with success level."""
+        syncer = PipedreamSyncer(config=mock_config)
+        syncer.log("Success message", "success")
+
+        captured = capsys.readouterr()
+        assert "Success message" in captured.out
+
+    def test_log_unknown_level_defaults_to_info(self, mock_config, capsys):
+        """Test logging with unknown level uses default behavior."""
+        syncer = PipedreamSyncer(config=mock_config)
+        syncer.log("Unknown level message", "unknown")
+
+        captured = capsys.readouterr()
+        assert "Unknown level message" in captured.out
+
+
+class TestScreenshotAlways:
+    """Tests for screenshot_always functionality."""
+
+    @pytest.fixture
+    def mock_config(self):
+        """Create a mock DeployConfig for testing."""
+        return DeployConfig(
+            version="1.0",
+            pipedream_base_url="https://pipedream.com",
+            workflows={},
+            settings=DeploySettings(screenshot_path=".tmp/screenshots"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_take_screenshot_with_screenshot_always(self, mock_config, tmp_path):
+        """Test take_screenshot works with screenshot_always enabled."""
+        mock_config.settings.screenshot_path = str(tmp_path)
+        syncer = PipedreamSyncer(config=mock_config, screenshot_always=True)
+
+        mock_page = AsyncMock()
+        mock_page.screenshot = AsyncMock()
+        syncer.page = mock_page
+
+        result = await syncer.take_screenshot("always_test")
+
+        assert result is not None
+        assert "always_test" in result
+        mock_page.screenshot.assert_called_once()
+
+
+class TestResultsTracking:
+    """Tests for results tracking in syncer."""
+
+    @pytest.fixture
+    def mock_config(self):
+        """Create a mock DeployConfig for testing."""
+        return DeployConfig(
+            version="1.0",
+            pipedream_base_url="https://pipedream.com",
+            workflows={},
+            settings=DeploySettings(),
+        )
+
+    def test_results_empty_on_init(self, mock_config):
+        """Test that results list is empty on initialization."""
+        syncer = PipedreamSyncer(config=mock_config)
+        assert syncer.results == []
+
+    def test_results_can_be_appended(self, mock_config):
+        """Test that results can be appended."""
+        syncer = PipedreamSyncer(config=mock_config)
+        result = WorkflowResult(
+            workflow_key="test",
+            workflow_id="p_test",
+            workflow_name="Test",
+            status="success",
+        )
+        syncer.results.append(result)
+        assert len(syncer.results) == 1
+        assert syncer.results[0].status == "success"
+
+
+class TestGetUniqueMarker:
+    """Tests for _get_unique_marker method."""
+
+    @pytest.fixture
+    def mock_config(self):
+        """Create a mock DeployConfig for testing."""
+        return DeployConfig(
+            version="1.0",
+            pipedream_base_url="https://pipedream.com",
+            workflows={},
+            settings=DeploySettings(),
+        )
+
+    def test_finds_default_max_results_marker(self, mock_config):
+        """Test finding DEFAULT_MAX_RESULTS marker."""
+        syncer = PipedreamSyncer(config=mock_config)
+        code = "# Gmail fetcher\nDEFAULT_MAX_RESULTS = 50\ndef handler(pd): pass"
+
+        marker = syncer._get_unique_marker(code)
+
+        assert "DEFAULT_MAX_RESULTS" in marker
+
+    def test_finds_label_name_marker(self, mock_config):
+        """Test finding LABEL_NAME_TO_ADD marker."""
+        syncer = PipedreamSyncer(config=mock_config)
+        code = "# Label step\nLABEL_NAME_TO_ADD = 'notiontaskcreated'\ndef handler(pd): pass"
+
+        marker = syncer._get_unique_marker(code)
+
+        assert "LABEL_NAME_TO_ADD" in marker
+
+    def test_finds_previous_step_gmail_marker(self, mock_config):
+        """Test finding PREVIOUS_STEP_NAME=gmail marker."""
+        syncer = PipedreamSyncer(config=mock_config)
+        code = "# Notion step\nPREVIOUS_STEP_NAME = 'gmail'\ndef handler(pd): pass"
+
+        marker = syncer._get_unique_marker(code)
+
+        assert "PREVIOUS_STEP_NAME" in marker
+
+    def test_finds_gcal_event_marker(self, mock_config):
+        """Test finding gcal_event_to_notion marker."""
+        syncer = PipedreamSyncer(config=mock_config)
+        code = "# GCal step\ndef gcal_event_to_notion(event): pass"
+
+        marker = syncer._get_unique_marker(code)
+
+        assert "gcal_event_to_notion" in marker
+
+    def test_fallback_to_config_line(self, mock_config):
+        """Test fallback to a config line when no known markers found."""
+        syncer = PipedreamSyncer(config=mock_config)
+        # Build code with enough lines before the config section
+        code = "\n".join(["# import line"] * 12) + "\nSOME_CONFIG = 'value'\ndef handler(pd): pass"
+
+        marker = syncer._get_unique_marker(code)
+
+        assert "SOME_CONFIG" in marker
+
+    def test_fallback_to_first_100_chars(self, mock_config):
+        """Test fallback to first 100 chars when no markers or config lines."""
+        syncer = PipedreamSyncer(config=mock_config)
+        code = "def simple_function():\n    pass"
+
+        marker = syncer._get_unique_marker(code)
+
+        assert len(marker) <= 100
+        assert "def simple_function" in marker
+
+
+class TestTeardownBrowser:
+    """Tests for teardown_browser method."""
+
+    @pytest.fixture
+    def mock_config(self):
+        """Create a mock DeployConfig for testing."""
+        return DeployConfig(
+            version="1.0",
+            pipedream_base_url="https://pipedream.com",
+            workflows={},
+            settings=DeploySettings(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_teardown_browser_closes_context_and_playwright(self, mock_config):
+        """Test teardown properly closes context and stops playwright."""
+        syncer = PipedreamSyncer(config=mock_config)
+
+        mock_context = AsyncMock()
+        mock_context.cookies = AsyncMock(return_value=[])
+        mock_playwright = AsyncMock()
+        syncer.context = mock_context
+        syncer.playwright = mock_playwright
+
+        await syncer.teardown_browser()
+
+        mock_context.close.assert_called_once()
+        mock_playwright.stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_teardown_browser_handles_no_context(self, mock_config):
+        """Test teardown handles case when context is None."""
+        syncer = PipedreamSyncer(config=mock_config)
+        syncer.context = None
+        syncer.playwright = AsyncMock()
+
+        # Should not raise
+        await syncer.teardown_browser()
+
+    @pytest.mark.asyncio
+    async def test_teardown_browser_handles_no_playwright(self, mock_config):
+        """Test teardown handles case when playwright is None."""
+        syncer = PipedreamSyncer(config=mock_config)
+        mock_context = AsyncMock()
+        mock_context.cookies = AsyncMock(return_value=[])
+        syncer.context = mock_context
+        syncer.playwright = None
+
+        # Should not raise
+        await syncer.teardown_browser()
+
+
+class TestNavigationErrors:
+    """Tests for navigation error handling."""
+
+    @pytest.fixture
+    def mock_config(self):
+        """Create a mock DeployConfig for testing."""
+        return DeployConfig(
+            version="1.0",
+            pipedream_base_url="https://pipedream.com",
+            workflows={},
+            settings=DeploySettings(screenshot_on_failure=True),
+        )
+
+    @pytest.mark.asyncio
+    async def test_navigate_to_workflow_no_page(self, mock_config):
+        """Test navigate_to_workflow raises when page not initialized."""
+        syncer = PipedreamSyncer(config=mock_config)
+        syncer.page = None
+
+        with pytest.raises(NavigationError, match="Browser not initialized"):
+            await syncer.navigate_to_workflow("p_test123")
+
+
+class TestClickCodeTab:
+    """Tests for click_code_tab method."""
+
+    @pytest.fixture
+    def mock_config(self):
+        """Create a mock DeployConfig for testing."""
+        return DeployConfig(
+            version="1.0",
+            pipedream_base_url="https://pipedream.com",
+            workflows={},
+            settings=DeploySettings(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_click_code_tab_returns_early_when_no_page(self, mock_config):
+        """Test click_code_tab returns early when page not initialized."""
+        syncer = PipedreamSyncer(config=mock_config)
+        syncer.page = None
+
+        # Should return early without raising
+        result = await syncer.click_code_tab()
+        assert result is None
+
+
+class TestUpdateCode:
+    """Tests for update_code method."""
+
+    @pytest.fixture
+    def mock_config(self):
+        """Create a mock DeployConfig for testing."""
+        return DeployConfig(
+            version="1.0",
+            pipedream_base_url="https://pipedream.com",
+            workflows={},
+            settings=DeploySettings(autosave_wait=0.1),
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_code_no_page(self, mock_config):
+        """Test update_code raises when page not initialized."""
+        syncer = PipedreamSyncer(config=mock_config)
+        syncer.page = None
+
+        with pytest.raises(CodeUpdateError, match="Browser not initialized"):
+            await syncer.update_code("def handler(pd): pass")
