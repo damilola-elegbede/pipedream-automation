@@ -188,6 +188,13 @@ def handler(pd: "pipedream"):
     # Generate idempotency key for duplicate prevention
     idempotency_key = generate_event_id(notion_id)
 
+    # Validate idempotency key was generated successfully
+    if not idempotency_key:
+        exit_message = f"Invalid or missing Notion Page ID -- Cannot generate event ID for task: '{task_name}'"
+        logger.warning(exit_message)
+        pd.flow.exit(exit_message)
+        return
+
     # Log extracted details
     logger.info(f"Subject: {task_name}")
     logger.info(f"Start: {final_start_date}")

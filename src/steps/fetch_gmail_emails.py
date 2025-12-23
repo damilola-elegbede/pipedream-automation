@@ -135,7 +135,7 @@ def handler(pd: "pipedream"):
         print(f"Requesting message list page... (Page token: {page_token}, Current count: {len(all_message_ids)})")
         try:
             r_list = retry_with_backoff(
-                lambda: requests.get(list_url, headers=common_headers, params=params)
+                lambda p=params: requests.get(list_url, headers=common_headers, params=p, timeout=30)
             )
         except requests.exceptions.RequestException as e:
             print(f"Error during Gmail API list request: {e}")
@@ -167,7 +167,7 @@ def handler(pd: "pipedream"):
         print(f"  Fetching full details for message ID: {msg_id}")
         try:
             r_get = retry_with_backoff(
-                lambda url=get_url: requests.get(url, headers=common_headers, params=get_params)
+                lambda url=get_url: requests.get(url, headers=common_headers, params=get_params, timeout=30)
             )
 
             message_data = r_get.json()

@@ -11,6 +11,7 @@ import requests
 import time
 import random
 import json
+import re
 
 # --- Configuration ---
 PREVIOUS_STEP_NAME = "create_notion_task"
@@ -55,7 +56,7 @@ def get_label_id(service_headers, label_name):
     print(f"Attempting to find Label ID for: '{label_name}'")
     try:
         response = retry_with_backoff(
-            lambda: requests.get(GMAIL_LABELS_URL, headers=service_headers)
+            lambda: requests.get(GMAIL_LABELS_URL, headers=service_headers, timeout=30)
         )
         labels_data = response.json()
         labels = labels_data.get('labels', [])
@@ -145,33 +146,44 @@ Content-Type: application/json
 
         try:
             response = retry_with_backoff(
-                lambda body=batch_body: requests.post(
+                lambda body=batch_body, hdrs=batch_headers: requests.post(
                     GMAIL_BATCH_URL,
-                    headers=batch_headers,
-                    data=body
+                    headers=hdrs,
+                    data=body,
+                    timeout=60  # Batch operations may take longer
                 )
             )
 
             # Parse batch response to identify individual successes/failures
             response_text = response.text
 
-            # Simple parsing: check for 200 OK responses
-            # Gmail batch responses have format: HTTP/1.1 200 OK for success
-            for idx, msg_id in enumerate(batch_ids):
-                # Look for the response for this item
-                # This is a simplified check - batch responses are complex multipart
-                if f'"id": "{msg_id}"' in response_text or "200 OK" in response_text:
-                    successfully_labeled.append(msg_id)
-                    print(f"  Labeled message: {msg_id}")
-                else:
-                    # Check if there's a specific error
-                    errors.append({
-                        "gmail_message_id": msg_id,
-                        "error": "Batch response unclear - verify manually"
-                    })
+            # Parse multipart response properly
+            # Gmail batch responses are multipart with Content-ID headers
+            parts = response_text.split(f'--{boundary}')
+            parsed_count = 0
 
-            # If we can't parse individual responses, assume success if batch succeeded
-            if not successfully_labeled and response.status_code == 200:
+            for part in parts:
+                # Extract Content-ID and HTTP status from each part
+                content_id_match = re.search(r'Content-ID:\s*<response-item(\d+)>', part)
+                status_match = re.search(r'HTTP/1\.1\s+(\d+)', part)
+
+                if content_id_match and status_match:
+                    idx = int(content_id_match.group(1))
+                    status = int(status_match.group(1))
+                    if idx < len(batch_ids):
+                        msg_id = batch_ids[idx]
+                        if status == 200:
+                            successfully_labeled.append(msg_id)
+                            print(f"  Labeled message: {msg_id}")
+                        else:
+                            errors.append({
+                                "gmail_message_id": msg_id,
+                                "error": f"HTTP {status}"
+                            })
+                        parsed_count += 1
+
+            # Fallback: if we couldn't parse individual responses but batch succeeded
+            if parsed_count == 0 and response.status_code == 200:
                 successfully_labeled.extend(batch_ids)
                 print(f"  Batch completed successfully for {len(batch_ids)} messages")
 
@@ -189,7 +201,8 @@ Content-Type: application/json
                         lambda url=modify_url: requests.post(
                             url,
                             headers=service_headers,
-                            json={"addLabelIds": [label_id]}
+                            json={"addLabelIds": [label_id]},
+                            timeout=30
                         )
                     )
                     successfully_labeled.append(msg_id)

@@ -357,7 +357,9 @@ def handler(pd: "pipedream"):
             }
             print(f"  Sending request to create Notion page with properties: {json.dumps(properties_payload, indent=2)}")
             response_page = retry_with_backoff(
-                lambda: requests.post(notion_pages_api_url, headers=headers, json=page_creation_body)
+                lambda body=page_creation_body: requests.post(
+                    notion_pages_api_url, headers=headers, json=body, timeout=30
+                )
             )
             created_page_data = response_page.json()
             page_id = created_page_data.get("id")
@@ -390,8 +392,10 @@ def handler(pd: "pipedream"):
                             print(f"    Raw append_blocks_body (may be large): {append_blocks_body}")
 
                         blocks_url = f"{notion_blocks_api_url_base}{page_id}/children"
-                        response_blocks = retry_with_backoff(
-                            lambda url=blocks_url, body=append_blocks_body: requests.patch(url, headers=headers, json=body)
+                        retry_with_backoff(
+                            lambda url=blocks_url, body=append_blocks_body: requests.patch(
+                                url, headers=headers, json=body, timeout=30
+                            )
                         )
                         print(f"    Successfully appended content blocks (chunk {chunk_idx + 1}).")
                         if len(chunks) > 1:

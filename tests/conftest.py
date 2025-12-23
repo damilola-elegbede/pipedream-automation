@@ -77,6 +77,7 @@ def sample_notion_task_trigger():
     return {
         "trigger": {
             "event": {
+                "id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",  # 32-char hex Notion page ID
                 "properties": {
                     "Task name": {
                         "title": [{"plain_text": "Test Task"}]
