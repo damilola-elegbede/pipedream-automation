@@ -164,7 +164,7 @@ def _substitute_env_vars(value: Any) -> Any:
         return value
 
 
-def load_config(config_path: str, base_path: Optional[str] = None) -> DeployConfig:
+def load_config(config_path: str) -> DeployConfig:
     """
     Load and parse the deployment configuration file.
 
@@ -173,7 +173,6 @@ def load_config(config_path: str, base_path: Optional[str] = None) -> DeployConf
 
     Args:
         config_path: Path to the YAML configuration file
-        base_path: Base path for resolving relative script paths (defaults to cwd)
 
     Returns:
         Parsed DeployConfig object

@@ -53,17 +53,23 @@ def step_by_name(name: str) -> str:
     Updated December 2024: Pipedream's DOM structure uses div containers
     with step names displayed as text. We use text-based selectors as primary.
     """
+    # Escape special characters to prevent selector injection
+    # Escape single quotes for :has-text() selectors
+    escaped_single = name.replace("'", "\\'")
+    # Escape double quotes for CSS attribute selectors
+    escaped_double = name.replace('"', '\\"')
+
     # Primary: Use text selector which reliably finds step names in the UI
     # Secondary: Try data attributes and class names (fallback)
     return (
         # Text-based selectors (most reliable for current Pipedream UI)
-        f"div:has-text('{name}') >> nth=0, "
+        f"div:has-text('{escaped_single}') >> nth=0, "
         # Data attribute selectors (if Pipedream adds them)
-        f"[data-step-name='{name}'], "
-        f"[data-testid='step']:has-text('{name}'), "
+        f'[data-step-name="{escaped_double}"], '
+        f"[data-testid='step']:has-text('{escaped_single}'), "
         # Class-based selectors (legacy)
-        f".step-container:has-text('{name}'), "
-        f".workflow-step:has-text('{name}')"
+        f".step-container:has-text('{escaped_single}'), "
+        f".workflow-step:has-text('{escaped_single}')"
     )
 
 

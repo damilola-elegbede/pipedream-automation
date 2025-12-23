@@ -45,89 +45,89 @@ async def extract_cookies():
             ignore_default_args=["--enable-automation"],
         )
 
-        page = context.pages[0] if context.pages else await context.new_page()
+        try:
+            page = context.pages[0] if context.pages else await context.new_page()
 
-        print("\nOpening Pipedream login page...")
-        await page.goto("https://pipedream.com/auth/login")
+            print("\nOpening Pipedream login page...")
+            await page.goto("https://pipedream.com/auth/login")
 
-        print("\n" + "=" * 60)
-        print("INSTRUCTIONS:")
-        print("=" * 60)
-        print("1. Click 'Sign in with Google' and complete login")
-        print("2. Navigate to any workflow to ensure full auth")
-        print("3. Run in another terminal: touch .tmp/logged_in")
-        print("=" * 60)
-        print("\nWaiting for signal file...")
+            print("\n" + "=" * 60)
+            print("INSTRUCTIONS:")
+            print("=" * 60)
+            print("1. Click 'Sign in with Google' and complete login")
+            print("2. Navigate to any workflow to ensure full auth")
+            print("3. Run in another terminal: touch .tmp/logged_in")
+            print("=" * 60)
+            print("\nWaiting for signal file...")
 
-        # Wait for signal
-        max_wait = 300
-        waited = 0
-        while not signal_file.exists() and waited < max_wait:
+            # Wait for signal
+            max_wait = 300
+            waited = 0
+            while not signal_file.exists() and waited < max_wait:
+                await asyncio.sleep(2)
+                waited += 2
+                if waited % 30 == 0:
+                    print(f"  Still waiting... ({waited}s)")
+
+            if not signal_file.exists():
+                print("\nTimeout! Run: touch .tmp/logged_in")
+                return
+
+            print("\nExtracting cookies...")
             await asyncio.sleep(2)
-            waited += 2
-            if waited % 30 == 0:
-                print(f"  Still waiting... ({waited}s)")
 
-        if not signal_file.exists():
-            print("\nTimeout! Run: touch .tmp/logged_in")
+            cookies = await context.cookies()
+            pipedream_cookies = [
+                c for c in cookies
+                if "pipedream.com" in c.get("domain", "")
+            ]
+
+            if not pipedream_cookies:
+                print("\nERROR: No Pipedream cookies found!")
+                return
+
+            cookie_data = []
+            for c in pipedream_cookies:
+                cookie_data.append({
+                    "name": c["name"],
+                    "value": c["value"],
+                    "domain": c["domain"],
+                    "path": c.get("path", "/"),
+                    "expires": c.get("expires", -1),
+                    "httpOnly": c.get("httpOnly", False),
+                    "secure": c.get("secure", True),
+                    "sameSite": c.get("sameSite", "Lax"),
+                })
+
+            cookies_json = json.dumps(cookie_data, indent=2)
+            cookies_b64 = base64.b64encode(cookies_json.encode()).decode()
+
+            # Save files
+            (tmp_dir / "cookies.json").write_text(cookies_json)
+            (tmp_dir / "cookies_base64.txt").write_text(cookies_b64)
+
+            print("\n" + "=" * 60)
+            print(f"SUCCESS! {len(pipedream_cookies)} cookies extracted.")
+            print("=" * 60)
+
+            now = time.time()
+            for c in cookie_data:
+                if c["expires"] > 0:
+                    days = (c["expires"] - now) / 86400
+                    print(f"  {c['name']}: {days:.1f} days left")
+
+            print("\n" + "=" * 60)
+            print("PIPEDREAM_COOKIES:")
+            print("=" * 60)
+            print(cookies_b64)
+            print("=" * 60)
+
+            if signal_file.exists():
+                signal_file.unlink()
+
+            return cookies_b64
+        finally:
             await context.close()
-            return
-
-        print("\nExtracting cookies...")
-        await asyncio.sleep(2)
-
-        cookies = await context.cookies()
-        pipedream_cookies = [
-            c for c in cookies
-            if "pipedream.com" in c.get("domain", "")
-        ]
-
-        if not pipedream_cookies:
-            print("\nERROR: No Pipedream cookies found!")
-            await context.close()
-            return
-
-        cookie_data = []
-        for c in pipedream_cookies:
-            cookie_data.append({
-                "name": c["name"],
-                "value": c["value"],
-                "domain": c["domain"],
-                "path": c.get("path", "/"),
-                "expires": c.get("expires", -1),
-                "httpOnly": c.get("httpOnly", False),
-                "secure": c.get("secure", True),
-                "sameSite": c.get("sameSite", "Lax"),
-            })
-
-        cookies_json = json.dumps(cookie_data, indent=2)
-        cookies_b64 = base64.b64encode(cookies_json.encode()).decode()
-
-        # Save files
-        (tmp_dir / "cookies.json").write_text(cookies_json)
-        (tmp_dir / "cookies_base64.txt").write_text(cookies_b64)
-
-        print("\n" + "=" * 60)
-        print(f"SUCCESS! {len(pipedream_cookies)} cookies extracted.")
-        print("=" * 60)
-
-        now = time.time()
-        for c in cookie_data:
-            if c["expires"] > 0:
-                days = (c["expires"] - now) / 86400
-                print(f"  {c['name']}: {days:.1f} days left")
-
-        print("\n" + "=" * 60)
-        print("PIPEDREAM_COOKIES:")
-        print("=" * 60)
-        print(cookies_b64)
-        print("=" * 60)
-
-        if signal_file.exists():
-            signal_file.unlink()
-
-        await context.close()
-        return cookies_b64
 
 
 if __name__ == "__main__":
