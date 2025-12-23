@@ -13,6 +13,9 @@ import logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+# --- Configuration ---
+TIMEZONE = "America/Denver"  # Mountain Time (handles MST/MDT automatically)
+
 
 def safe_get(data, keys, default=None):
     """
@@ -53,6 +56,45 @@ def safe_get(data, keys, default=None):
 def is_datetime(date_str):
     """Check if string is a dateTime (contains 'T') vs date-only."""
     return bool(date_str and 'T' in date_str)
+
+
+def generate_event_id(notion_page_id):
+    """
+    Generate an idempotent Google Calendar event ID from Notion Page ID.
+
+    Google Calendar event IDs must:
+    - Be 5-1024 characters
+    - Contain only lowercase letters a-v and digits 0-9
+    - Be unique per calendar
+
+    We use the Notion Page ID (32 hex chars) and prefix with 'notion' to:
+    - Ensure uniqueness (Notion IDs are unique)
+    - Enable idempotent operations (same task = same event ID)
+    - Prevent duplicates on workflow retries
+
+    Args:
+        notion_page_id: The Notion page ID (32 hex characters)
+
+    Returns:
+        A valid Google Calendar event ID, or None if page ID is invalid.
+    """
+    if not notion_page_id:
+        return None
+
+    # Clean the ID: remove hyphens, lowercase
+    clean_id = notion_page_id.replace('-', '').lower()
+
+    # Validate: should be 32 hex characters
+    if len(clean_id) != 32:
+        logger.warning(f"Notion page ID has unexpected length: {len(clean_id)}")
+        return None
+
+    # Google Calendar allows a-v (lowercase) and 0-9
+    # Hex uses a-f and 0-9, so we're within bounds
+    # Prefix with 'notion' to namespace our events
+    event_id = f"notion{clean_id}"
+
+    return event_id
 
 
 def normalize_dates(start, end):
@@ -143,12 +185,24 @@ def handler(pd: "pipedream"):
     # Normalize dates to ensure consistent format for Google Calendar
     final_start_date, final_end_date = normalize_dates(due_date_start, due_date_end)
 
+    # Generate idempotency key for duplicate prevention
+    idempotency_key = generate_event_id(notion_id)
+
+    # Validate idempotency key was generated successfully
+    if not idempotency_key:
+        exit_message = f"Invalid or missing Notion Page ID -- Cannot generate event ID for task: '{task_name}'"
+        logger.warning(exit_message)
+        pd.flow.exit(exit_message)
+        return
+
     # Log extracted details
     logger.info(f"Subject: {task_name}")
     logger.info(f"Start: {final_start_date}")
     logger.info(f"End: {final_end_date}")
+    logger.info(f"TimeZone: {TIMEZONE}")
     logger.info(f"Notion ID: {notion_id}")
     logger.info(f"Notion URL: {notion_url}")
+    logger.info(f"Idempotency Key (Event ID): {idempotency_key}")
 
     # Structure the return object for the next step (e.g., Google Calendar create event)
     ret_obj = {
@@ -156,9 +210,11 @@ def handler(pd: "pipedream"):
             "Subject": task_name,
             "Start": final_start_date,
             "End": final_end_date,
+            "TimeZone": TIMEZONE,
             "Update": False,
             "NotionId": notion_id,
             "Url": notion_url,
+            "EventId": idempotency_key,  # Used for idempotent event creation
             "Description": f"Notion Task: {task_name}\nLink: {notion_url or 'N/A'}"
         }
     }

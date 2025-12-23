@@ -9,6 +9,8 @@ Required: Connect Gmail account with 'gmail.readonly' scope
 """
 import requests
 import base64
+import random
+import time
 
 # --- Configuration ---
 DEFAULT_MAX_RESULTS = 50  # Limit to prevent timeouts and rate limits
@@ -64,6 +66,35 @@ def get_body_parts(payload):
     return plain_text_body, html_body
 
 
+def retry_with_backoff(request_func, max_retries=5):
+    """
+    Execute request with exponential backoff for rate limits.
+
+    Handles HTTP 429 (Too Many Requests) and 503 (Service Unavailable) errors
+    by waiting and retrying with exponential backoff. Respects Retry-After header.
+    """
+    for attempt in range(max_retries):
+        try:
+            response = request_func()
+            response.raise_for_status()
+            return response
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code in (429, 503) and attempt < max_retries - 1:
+                retry_after = e.response.headers.get('Retry-After')
+                if retry_after:
+                    try:
+                        wait = float(retry_after)
+                    except ValueError:
+                        wait = (2 ** attempt) + random.uniform(0, 1)
+                else:
+                    wait = (2 ** attempt) + random.uniform(0, 1)
+                print(f"Rate limited. Waiting {wait:.1f}s (attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait)
+            else:
+                raise
+    raise Exception(f"Max retries ({max_retries}) exceeded")
+
+
 def handler(pd: "pipedream"):
     # --- 1. Authentication ---
     try:
@@ -103,8 +134,9 @@ def handler(pd: "pipedream"):
 
         print(f"Requesting message list page... (Page token: {page_token}, Current count: {len(all_message_ids)})")
         try:
-            r_list = requests.get(list_url, headers=common_headers, params=params)
-            r_list.raise_for_status()
+            r_list = retry_with_backoff(
+                lambda p=params: requests.get(list_url, headers=common_headers, params=p, timeout=30)
+            )
         except requests.exceptions.RequestException as e:
             print(f"Error during Gmail API list request: {e}")
             raise e
@@ -134,8 +166,9 @@ def handler(pd: "pipedream"):
         get_url = f"{get_url_base}{msg_id}"
         print(f"  Fetching full details for message ID: {msg_id}")
         try:
-            r_get = requests.get(get_url, headers=common_headers, params=get_params)
-            r_get.raise_for_status()
+            r_get = retry_with_backoff(
+                lambda url=get_url: requests.get(url, headers=common_headers, params=get_params, timeout=30)
+            )
 
             message_data = r_get.json()
             payload = message_data.get('payload', {})

@@ -15,6 +15,7 @@ import requests
 import time
 import re
 import json
+import random
 
 # --- Configuration ---
 PREVIOUS_STEP_NAME = "fetch_gmail_emails"
@@ -39,6 +40,35 @@ def extract_email(email_string):
     if '@' in email_string:
         return email_string.strip()
     return None
+
+
+def retry_with_backoff(request_func, max_retries=5):
+    """
+    Execute request with exponential backoff for rate limits.
+
+    Handles HTTP 429 (Too Many Requests) and 503 (Service Unavailable) errors
+    by waiting and retrying with exponential backoff. Respects Retry-After header.
+    """
+    for attempt in range(max_retries):
+        try:
+            response = request_func()
+            response.raise_for_status()
+            return response
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code in (429, 503) and attempt < max_retries - 1:
+                retry_after = e.response.headers.get('Retry-After')
+                if retry_after:
+                    try:
+                        wait = float(retry_after)
+                    except ValueError:
+                        wait = (2 ** attempt) + random.uniform(0, 1)
+                else:
+                    wait = (2 ** attempt) + random.uniform(0, 1)
+                print(f"Rate limited. Waiting {wait:.1f}s (attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait)
+            else:
+                raise
+    raise Exception(f"Max retries ({max_retries}) exceeded")
 
 
 def build_notion_properties(email_data, gmail_message_id):
@@ -85,19 +115,16 @@ def check_existing_task(headers, database_id, gmail_message_id):
     Returns the existing page data if found, None otherwise.
     """
     query_url = f"https://api.notion.com/v1/databases/{database_id}/query"
+    filter_payload = {
+        "filter": {
+            "property": "Message ID",
+            "rich_text": {"equals": gmail_message_id}
+        }
+    }
     try:
-        response = requests.post(
-            query_url,
-            headers=headers,
-            json={
-                "filter": {
-                    "property": "Message ID",
-                    "rich_text": {"equals": gmail_message_id}
-                }
-            },
-            timeout=30
+        response = retry_with_backoff(
+            lambda: requests.post(query_url, headers=headers, json=filter_payload, timeout=30)
         )
-        response.raise_for_status()
         results = response.json().get("results", [])
         if results:
             return results[0]
@@ -329,8 +356,11 @@ def handler(pd: "pipedream"):
                 "properties": properties_payload,
             }
             print(f"  Sending request to create Notion page with properties: {json.dumps(properties_payload, indent=2)}")
-            response_page = requests.post(notion_pages_api_url, headers=headers, json=page_creation_body)
-            response_page.raise_for_status()
+            response_page = retry_with_backoff(
+                lambda body=page_creation_body: requests.post(
+                    notion_pages_api_url, headers=headers, json=body, timeout=30
+                )
+            )
             created_page_data = response_page.json()
             page_id = created_page_data.get("id")
             print(f"  Successfully created Notion page: ID {page_id}")
@@ -362,8 +392,11 @@ def handler(pd: "pipedream"):
                             print(f"    Raw append_blocks_body (may be large): {append_blocks_body}")
 
                         blocks_url = f"{notion_blocks_api_url_base}{page_id}/children"
-                        response_blocks = requests.patch(blocks_url, headers=headers, json=append_blocks_body)
-                        response_blocks.raise_for_status()
+                        retry_with_backoff(
+                            lambda url=blocks_url, body=append_blocks_body: requests.patch(
+                                url, headers=headers, json=body, timeout=30
+                            )
+                        )
                         print(f"    Successfully appended content blocks (chunk {chunk_idx + 1}).")
                         if len(chunks) > 1:
                             time.sleep(0.3)

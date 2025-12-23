@@ -39,20 +39,20 @@ class TestExtractNotionPageId:
     """Tests for the extract_notion_page_id function (bug fix for fragile ID extraction)."""
 
     def test_extracts_32_char_hex_id(self):
-        url = "https://www.notion.so/Page-Title-abc123def456789012345678901234"
+        url = "https://www.notion.so/Page-Title-abc123def456789012345678901234ab"
         result = extract_notion_page_id(url)
-        assert result == "abc123def456789012345678901234"
+        assert result == "abc123def456789012345678901234ab"
 
     def test_handles_query_params(self):
         """Bug fix: should handle URLs with query parameters."""
-        url = "https://www.notion.so/Page-Title-abc123def456789012345678901234?pvs=4"
+        url = "https://www.notion.so/Page-Title-abc123def456789012345678901234ab?pvs=4"
         result = extract_notion_page_id(url)
-        assert result == "abc123def456789012345678901234"
+        assert result == "abc123def456789012345678901234ab"
 
     def test_handles_multiple_query_params(self):
-        url = "https://www.notion.so/Page-abc123def456789012345678901234?pvs=4&foo=bar"
+        url = "https://www.notion.so/Page-abc123def456789012345678901234ab?pvs=4&foo=bar"
         result = extract_notion_page_id(url)
-        assert result == "abc123def456789012345678901234"
+        assert result == "abc123def456789012345678901234ab"
 
     def test_returns_none_for_invalid_url(self):
         url = "https://example.com/not-a-notion-url"
@@ -118,7 +118,7 @@ class TestHandler:
             "trigger": {
                 "event": {
                     "summary": "All Day Event",
-                    "location": "https://www.notion.so/Test-abc123def456789012345678901234",
+                    "location": "https://www.notion.so/Test-abc123def456789012345678901234ab",
                     "start": {"date": "2024-01-20"},
                     "end": {"date": "2024-01-21"}
                 }

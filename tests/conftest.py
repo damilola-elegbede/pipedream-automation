@@ -20,6 +20,13 @@ class MockFlow:
         self.exit_message = message
 
 
+class MockDataStore(dict):
+    """Mock Pipedream Data Store for testing caching."""
+
+    def get(self, key, default=None):
+        return super().get(key, default)
+
+
 class MockPipedream:
     """Mock Pipedream context object for testing handlers."""
 
@@ -27,6 +34,7 @@ class MockPipedream:
         self.inputs = {}
         self.steps = {}
         self.flow = MockFlow()
+        self.data_store = MockDataStore()
 
 
 @pytest.fixture
@@ -69,6 +77,7 @@ def sample_notion_task_trigger():
     return {
         "trigger": {
             "event": {
+                "id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",  # 32-char hex Notion page ID
                 "properties": {
                     "Task name": {
                         "title": [{"plain_text": "Test Task"}]

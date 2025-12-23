@@ -134,6 +134,7 @@ class TestHandler:
         mock_pd.steps = {
             "trigger": {
                 "event": {
+                    "id": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5",  # 32-char hex Notion page ID
                     "properties": {
                         "Task name": {"title": [{"plain_text": "Single Day Task"}]},
                         "Due Date": {"date": {"start": "2024-01-20", "end": None}},
