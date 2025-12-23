@@ -76,3 +76,7 @@ Thumbs.db
 
 # Temporary files
 .tmp/
+
+# Pipedream deployment cookies (sensitive)
+cookies.json
+**/cookies.json

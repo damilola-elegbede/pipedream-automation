@@ -1,0 +1,90 @@
+# Pipedream Workflow Deployment Configuration
+# Maps local Python scripts to Pipedream workflow steps
+#
+# Environment Variables Required:
+#   PIPEDREAM_WORKFLOW_GMAIL_TO_NOTION     - Workflow ID for Gmail to Notion
+#   PIPEDREAM_WORKFLOW_NOTION_TASK_TO_GCAL - Workflow ID for Notion Task to GCal
+#   PIPEDREAM_WORKFLOW_NOTION_UPDATE_TO_GCAL - Workflow ID for Notion Update to GCal
+#   PIPEDREAM_WORKFLOW_GCAL_TO_NOTION      - Workflow ID for GCal to Notion
+#
+# Usage:
+#   python -m src.deploy.deploy_to_pipedream --config config/pipedream-mapping.yaml
+#   python -m src.deploy.deploy_to_pipedream --workflow gmail_to_notion --dry-run
+
+version: "1.0"
+
+# Base URL for Pipedream
+pipedream_base_url: "https://pipedream.com"
+
+# Pipedream account settings (read from environment)
+pipedream_username: "${PIPEDREAM_USERNAME}"
+pipedream_project_id: "${PIPEDREAM_PROJECT_ID}"
+
+# Workflows to update
+# Workflow IDs are read from environment variables
+workflows:
+  # Gmail to Notion Workflow (3 steps)
+  gmail_to_notion:
+    id: "${PIPEDREAM_WORKFLOW_GMAIL_TO_NOTION}"
+    name: "Gmail to Notion Task Creator"
+    steps:
+      - step_name: "fetch_gmail_emails"
+        script_path: "src/steps/fetch_gmail_emails.py"
+        description: "Fetches emails from Gmail with label filters"
+      - step_name: "create_notion_task"
+        script_path: "src/steps/create_notion_task.py"
+        description: "Creates Notion tasks from email data"
+      - step_name: "label_gmail_processed"
+        script_path: "src/steps/label_gmail_processed.py"
+        description: "Labels processed emails in Gmail"
+
+  # Notion Task to Google Calendar Workflow
+  notion_task_to_gcal:
+    id: "${PIPEDREAM_WORKFLOW_NOTION_TASK_TO_GCAL}"
+    name: "Notion Task to GCal Event"
+    steps:
+      - step_name: "notion_task_to_gcal"
+        script_path: "src/steps/notion_task_to_gcal.py"
+        description: "Prepares Notion task for GCal event creation"
+
+  # Notion Update to GCal Workflow
+  notion_update_to_gcal:
+    id: "${PIPEDREAM_WORKFLOW_NOTION_UPDATE_TO_GCAL}"
+    name: "Notion Update to GCal Update"
+    steps:
+      - step_name: "notion_update_to_gcal"
+        script_path: "src/steps/notion_update_to_gcal.py"
+        description: "Handles Notion updates for GCal sync"
+
+  # GCal to Notion Sync Workflow
+  gcal_to_notion:
+    id: "${PIPEDREAM_WORKFLOW_GCAL_TO_NOTION}"
+    name: "GCal Event to Notion Sync"
+    steps:
+      - step_name: "gcal_event_to_notion"
+        script_path: "src/steps/gcal_event_to_notion.py"
+        description: "Syncs GCal changes back to Notion"
+
+# Deployment settings
+settings:
+  # Timeout for each step update (seconds)
+  step_timeout: 60
+
+  # Retry configuration
+  max_retries: 3
+  retry_delay_seconds: 5
+
+  # Wait for autosave after code change (seconds)
+  autosave_wait: 3
+
+  # Run in headless mode (true for CI, false for debugging)
+  headless: true
+
+  # Screenshot configuration
+  screenshot_on_failure: true
+  screenshot_path: ".tmp/screenshots"
+
+  # Viewport size for browser
+  viewport:
+    width: 1920
+    height: 1080
