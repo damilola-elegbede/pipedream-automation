@@ -11,6 +11,8 @@ Usage:
     python -m src.deploy.deploy_to_pipedream --dry-run
 """
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import re
