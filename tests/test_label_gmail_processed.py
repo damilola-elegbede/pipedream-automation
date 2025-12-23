@@ -106,7 +106,11 @@ class TestHandler:
         mock_pd.steps = {"create_notion_task": {"$return_value": sample_successful_mappings}}
         mock_get_label.return_value = "Label_123"
 
+        # Mock batch API response with proper attributes
         mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = '{"id": "msg_abc123"}\n{"id": "msg_def456"}'
+        mock_response.raise_for_status = MagicMock()
         mock_post.return_value = mock_response
 
         result = handler(mock_pd)
@@ -123,19 +127,21 @@ class TestHandler:
         mock_get_label.return_value = "Label_123"
 
         import requests
-        # Create a proper HTTPError with response attribute
+        # Create a proper HTTPError with response attribute for batch API failure
         mock_error_response = MagicMock()
         mock_error_response.status_code = 500
+        mock_error_response.headers = {}
         mock_error_response.json.return_value = {"error": {"message": "Server Error"}}
         http_error = requests.exceptions.HTTPError("API Error")
         http_error.response = mock_error_response
 
-        # First call succeeds, second fails
+        # Batch API fails, then fallback: first individual succeeds, second fails
         mock_success = MagicMock()
-        mock_post.side_effect = [mock_success, http_error]
+        mock_success.raise_for_status = MagicMock()
+        mock_post.side_effect = [http_error, mock_success, http_error]
 
         result = handler(mock_pd)
 
-        # Should have 1 success and 1 error
+        # Should have 1 success and 1 error from fallback individual requests
         assert len(result["successfully_labeled_ids"]) == 1
         assert len(result["errors"]) == 1

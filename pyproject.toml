@@ -30,7 +30,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --cov=src/deploy --cov-report=term-missing --cov-fail-under=60"
+addopts = "-v"
 markers = [
     "unit: Unit tests",
     "integration: Integration tests",

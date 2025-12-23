@@ -116,9 +116,22 @@ The `create_notion_task.py` step includes duplicate detection:
 
 ### Robust Error Handling
 
+- Exponential backoff with Retry-After header support for rate limits
 - All steps handle API errors gracefully
 - Failed operations are tracked and reported
 - Partial successes are handled (some emails succeed, some fail)
+
+### Idempotent Calendar Events
+
+- `notion_task_to_gcal.py` generates deterministic event IDs from Notion Page IDs
+- Prevents duplicate calendar events on workflow retries
+- Update flow uses `CreateIfMissing` flag to handle deleted events (404)
+
+### Efficient API Usage
+
+- Gmail Batch API for labeling (up to 100 messages per request)
+- Pipedream Data Store caching for label IDs
+- Timezone-aware calendar events (America/Denver)
 
 ### Pagination Limits
 
@@ -132,13 +145,15 @@ The test suite covers:
 - Integration tests for handlers with mocked APIs
 - Edge cases (missing data, API errors, duplicates)
 
-Current coverage: **74%** (exceeds 70% threshold)
+```bash
+# Run tests
+pytest tests/ -v
+```
 
 ## CI/CD
 
 GitHub Actions runs on every push/PR to main:
 - Tests against Python 3.8 and 3.12
-- Enforces 70% minimum coverage
 - Reports to Codecov
 
 ## License

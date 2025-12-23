@@ -13,6 +13,9 @@ import logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+# --- Configuration ---
+TIMEZONE = "America/Denver"  # Mountain Time (handles MST/MDT automatically)
+
 
 def safe_get(data, keys, default=None):
     """
@@ -148,18 +151,24 @@ def handler(pd: "pipedream"):
     logger.info(f"Subject: {task_name}")
     logger.info(f"Start: {final_start_date}")
     logger.info(f"End: {final_end_date}")
+    logger.info(f"TimeZone: {TIMEZONE}")
     logger.info(f"Notion URL: {notion_url}")
 
     # Structure the return object for the next step (e.g., Google Calendar update event)
+    # CreateIfMissing flag: If the calendar event was deleted (404), create a new one
+    # instead of failing. This handles the case where a user deletes an event in
+    # Google Calendar but the task still exists in Notion.
     ret_obj = {
         "GCal": {
             "Subject": task_name,
             "Start": final_start_date,
             "End": final_end_date,
+            "TimeZone": TIMEZONE,
             "Update": True,
             "EventId": event_id,
             "Url": notion_url,
-            "Description": f"Notion Task: {task_name}\nLink: {notion_url or 'N/A'}"
+            "Description": f"Notion Task: {task_name}\nLink: {notion_url or 'N/A'}",
+            "CreateIfMissing": True  # Handle 404: recreate event if it was deleted
         }
     }
 

@@ -98,6 +98,32 @@ def extract_notion_page_id(url):
     return None
 
 
+def validate_notion_page_id(page_id):
+    """
+    Validate that a Notion Page ID is exactly 32 hex characters.
+
+    Handles both formatted (with hyphens) and unformatted IDs.
+
+    Args:
+        page_id: The extracted page ID string.
+
+    Returns:
+        The cleaned 32-character page ID if valid, None otherwise.
+    """
+    if not page_id:
+        return None
+
+    # Remove any hyphens (some IDs may be formatted with dashes)
+    cleaned = page_id.lower().replace('-', '')
+
+    # Validate: exactly 32 hexadecimal characters
+    if len(cleaned) == 32 and all(c in '0123456789abcdef' for c in cleaned):
+        return cleaned
+
+    logger.warning(f"Invalid Notion Page ID format: '{page_id}' (cleaned: '{cleaned}', length: {len(cleaned)})")
+    return None
+
+
 def handler(pd: "pipedream"):
     """
     Processes Google Calendar event triggers, checks if they originated from Notion,
@@ -117,16 +143,17 @@ def handler(pd: "pipedream"):
 
     logger.info(f"Processing Notion-linked event: '{event_summary}'")
 
-    # --- 2. Extract Notion Page ID from Location URL ---
-    page_id = extract_notion_page_id(location)
+    # --- 2. Extract and Validate Notion Page ID from Location URL ---
+    raw_page_id = extract_notion_page_id(location)
+    page_id = validate_notion_page_id(raw_page_id)
 
     if not page_id:
-        exit_message = f"Could not reliably extract Notion Page ID from location: '{location}' for event '{event_summary}'. Skipping."
+        exit_message = f"Could not reliably extract/validate Notion Page ID from location: '{location}' for event '{event_summary}'. Raw extraction: '{raw_page_id}'. Skipping."
         logger.warning(exit_message)
         pd.flow.exit(exit_message)
         return
 
-    logger.info(f"Extracted Notion Page ID: {page_id}")
+    logger.info(f"Extracted and validated Notion Page ID: {page_id}")
 
     # --- 3. Extract Start and End Dates/Times ---
     start_obj = safe_get(event_data, ["start"], default={})
