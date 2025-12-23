@@ -11,7 +11,7 @@ import requests
 import time
 
 # --- Configuration ---
-PREVIOUS_STEP_NAME = "notion"
+PREVIOUS_STEP_NAME = "create_notion_task"
 LABEL_NAME_TO_ADD = "notiontaskcreated"
 GMAIL_MODIFY_URL_BASE = "https://www.googleapis.com/gmail/v1/users/me/messages/"
 GMAIL_LABELS_URL = "https://www.googleapis.com/gmail/v1/users/me/labels"

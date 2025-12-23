@@ -17,7 +17,7 @@ import re
 import json
 
 # --- Configuration ---
-PREVIOUS_STEP_NAME = "gmail"
+PREVIOUS_STEP_NAME = "fetch_gmail_emails"
 NOTION_API_VERSION = "2022-06-28"
 MAX_CODE_BLOCK_LENGTH = 2000
 

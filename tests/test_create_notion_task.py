@@ -150,7 +150,7 @@ class TestHandler:
     def test_returns_successful_mappings_on_empty_input(self, mock_pd, notion_auth):
         """Verify successful_mappings is always returned (bug fix)."""
         mock_pd.inputs = notion_auth
-        mock_pd.steps = {"gmail": {"$return_value": []}}
+        mock_pd.steps = {"fetch_gmail_emails": {"$return_value": []}}
 
         result = handler(mock_pd)
 
@@ -161,7 +161,7 @@ class TestHandler:
     def test_returns_successful_mappings_on_error(self, mock_pd, notion_auth):
         """Verify successful_mappings is returned even on error (bug fix)."""
         mock_pd.inputs = notion_auth
-        mock_pd.steps = {"gmail": {"$return_value": None}}
+        mock_pd.steps = {"fetch_gmail_emails": {"$return_value": None}}
 
         result = handler(mock_pd)
 
@@ -175,7 +175,7 @@ class TestHandler:
     def test_skips_duplicate_emails(self, mock_patch, mock_post, mock_check, mock_pd, notion_auth, sample_email):
         """Verify duplicate detection works (bug fix)."""
         mock_pd.inputs = notion_auth
-        mock_pd.steps = {"gmail": {"$return_value": [sample_email]}}
+        mock_pd.steps = {"fetch_gmail_emails": {"$return_value": [sample_email]}}
 
         # Simulate existing task found
         mock_check.return_value = {"id": "existing_page_id"}
@@ -197,7 +197,7 @@ class TestHandler:
     def test_creates_new_task_when_no_duplicate(self, mock_sleep, mock_patch, mock_post, mock_check, mock_pd, notion_auth, sample_email):
         """Verify new task creation when no duplicate exists."""
         mock_pd.inputs = notion_auth
-        mock_pd.steps = {"gmail": {"$return_value": [sample_email]}}
+        mock_pd.steps = {"fetch_gmail_emails": {"$return_value": [sample_email]}}
 
         # No existing task
         mock_check.return_value = None

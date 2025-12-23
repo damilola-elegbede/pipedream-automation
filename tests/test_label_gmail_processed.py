@@ -67,7 +67,7 @@ class TestHandler:
     @patch('steps.label_gmail_processed.get_label_id')
     def test_returns_error_when_label_not_found(self, mock_get_label, mock_pd, gmail_auth):
         mock_pd.inputs = gmail_auth
-        mock_pd.steps = {"notion": {"$return_value": {"successful_mappings": []}}}
+        mock_pd.steps = {"create_notion_task": {"$return_value": {"successful_mappings": []}}}
         mock_get_label.return_value = None
 
         result = handler(mock_pd)
@@ -78,7 +78,7 @@ class TestHandler:
     @patch('steps.label_gmail_processed.get_label_id')
     def test_handles_empty_mappings(self, mock_get_label, mock_pd, gmail_auth):
         mock_pd.inputs = gmail_auth
-        mock_pd.steps = {"notion": {"$return_value": {"successful_mappings": []}}}
+        mock_pd.steps = {"create_notion_task": {"$return_value": {"successful_mappings": []}}}
         mock_get_label.return_value = "Label_123"
 
         result = handler(mock_pd)
@@ -90,7 +90,7 @@ class TestHandler:
     def test_handles_missing_successful_mappings_key(self, mock_get_label, mock_pd, gmail_auth):
         """Test behavior when previous step doesn't include successful_mappings."""
         mock_pd.inputs = gmail_auth
-        mock_pd.steps = {"notion": {"$return_value": {"error": "some error"}}}
+        mock_pd.steps = {"create_notion_task": {"$return_value": {"error": "some error"}}}
         mock_get_label.return_value = "Label_123"
 
         result = handler(mock_pd)
@@ -103,7 +103,7 @@ class TestHandler:
     @patch('steps.label_gmail_processed.time.sleep')
     def test_labels_messages_successfully(self, mock_sleep, mock_post, mock_get_label, mock_pd, gmail_auth, sample_successful_mappings):
         mock_pd.inputs = gmail_auth
-        mock_pd.steps = {"notion": {"$return_value": sample_successful_mappings}}
+        mock_pd.steps = {"create_notion_task": {"$return_value": sample_successful_mappings}}
         mock_get_label.return_value = "Label_123"
 
         mock_response = MagicMock()
@@ -119,7 +119,7 @@ class TestHandler:
     @patch('steps.label_gmail_processed.time.sleep')
     def test_handles_partial_label_failure(self, mock_sleep, mock_post, mock_get_label, mock_pd, gmail_auth, sample_successful_mappings):
         mock_pd.inputs = gmail_auth
-        mock_pd.steps = {"notion": {"$return_value": sample_successful_mappings}}
+        mock_pd.steps = {"create_notion_task": {"$return_value": sample_successful_mappings}}
         mock_get_label.return_value = "Label_123"
 
         import requests
