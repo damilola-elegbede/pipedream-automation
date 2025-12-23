@@ -50,6 +50,48 @@ def safe_get(data, keys, default=None):
     return current
 
 
+def is_datetime(date_str):
+    """Check if string is a dateTime (contains 'T') vs date-only."""
+    return bool(date_str and 'T' in date_str)
+
+
+def normalize_dates(start, end):
+    """
+    Ensure start and end are in the same format for Google Calendar.
+
+    Google Calendar requires both start and end to use the same format:
+    - Either both are date (all-day): "2025-12-22"
+    - Or both are dateTime (timed): "2025-12-22T10:00:00"
+
+    Args:
+        start: The start date/datetime string from Notion
+        end: The end date/datetime string from Notion (can be None)
+
+    Returns:
+        Tuple of (normalized_start, normalized_end) in consistent format
+    """
+    if end is None:
+        return start, start
+
+    start_is_datetime = is_datetime(start)
+    end_is_datetime = is_datetime(end)
+
+    if start_is_datetime == end_is_datetime:
+        # Already consistent
+        return start, end
+
+    if start_is_datetime and not end_is_datetime:
+        # Start is dateTime, end is date-only
+        # Convert end to dateTime at end of day
+        logger.info(f"Normalizing dates: start is dateTime, end is date-only")
+        return start, f"{end}T23:59:59"
+    else:
+        # Start is date-only, end is dateTime
+        # Convert start to dateTime at start of day
+        logger.info(f"Normalizing dates: start is date-only, end is dateTime")
+        return f"{start}T00:00:00", end
+
+
 def handler(pd: "pipedream"):
     """
     Processes Notion page update data from a Pipedream trigger for updating
@@ -60,6 +102,9 @@ def handler(pd: "pipedream"):
     trigger_event_page = safe_get(pd.steps, ["trigger", "event", "page"], default={})
     properties = safe_get(trigger_event_page, ["properties"], default={})
 
+    # Debug: Log available property names to help troubleshoot
+    logger.info(f"Available properties: {list(properties.keys()) if isinstance(properties, dict) else 'N/A'}")
+
     # Task Name
     task_name = safe_get(properties, ["Task name", "title", 0, "plain_text"], default="Untitled Task")
 
@@ -68,7 +113,10 @@ def handler(pd: "pipedream"):
     due_date_end = safe_get(properties, ["Due Date", "date", "end"])
 
     # Google Event ID - Crucial for update
-    event_id = safe_get(properties, ["Google Event ID", "rich_text", 0, "plain_text"])
+    google_event_id_prop = safe_get(properties, ["Google Event ID"], default={})
+    logger.info(f"Google Event ID property: {google_event_id_prop}")
+    event_id = safe_get(google_event_id_prop, ["rich_text", 0, "plain_text"])
+    logger.info(f"Extracted event_id: '{event_id}'")
 
     # Notion Page URL
     notion_url = safe_get(trigger_event_page, ["url"])
@@ -92,13 +140,13 @@ def handler(pd: "pipedream"):
     # --- 3. Prepare data for event update (if checks passed) ---
     logger.info(f"Preparing to update event '{event_id}' for task: '{task_name}'")
 
-    # Use start date as end date if end date is not provided
-    final_end_date = due_date_end if due_date_end is not None else due_date_start
+    # Normalize dates to ensure consistent format for Google Calendar
+    final_start_date, final_end_date = normalize_dates(due_date_start, due_date_end)
 
     # Log extracted details
     logger.info(f"Event ID: {event_id}")
     logger.info(f"Subject: {task_name}")
-    logger.info(f"Start: {due_date_start}")
+    logger.info(f"Start: {final_start_date}")
     logger.info(f"End: {final_end_date}")
     logger.info(f"Notion URL: {notion_url}")
 
@@ -106,7 +154,7 @@ def handler(pd: "pipedream"):
     ret_obj = {
         "GCal": {
             "Subject": task_name,
-            "Start": due_date_start,
+            "Start": final_start_date,
             "End": final_end_date,
             "Update": True,
             "EventId": event_id,
