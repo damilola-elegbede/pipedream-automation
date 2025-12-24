@@ -436,32 +436,30 @@ class PipedreamSyncer:
 
         self.log("Expanding CODE section...", "debug")
 
-        # Check if editor is already visible IN THE VIEWPORT (not just has size)
+        # Check if editor is already visible (has size and not hidden)
         try:
             visible_editor = await self.page.evaluate("""
                 () => {
                     const editors = document.querySelectorAll('.monaco-editor, .cm-editor');
                     for (const editor of editors) {
                         const rect = editor.getBoundingClientRect();
-                        // Check if editor is actually visible in viewport:
-                        // - Has size (width/height > 100)
-                        // - Top is within viewport (not negative or below viewport)
-                        // - Left is within viewport
-                        const inViewport = (
+                        const style = window.getComputedStyle(editor);
+                        // Check if editor has size and is not hidden
+                        // Note: Don't require top >= 0 because editors in scrollable
+                        // panels can have negative top while still being visible
+                        const isVisible = (
                             rect.width > 100 &&
                             rect.height > 100 &&
-                            rect.top >= 0 &&
-                            rect.top < window.innerHeight &&
-                            rect.left >= 0 &&
-                            rect.left < window.innerWidth
+                            style.display !== 'none' &&
+                            style.visibility !== 'hidden'
                         );
-                        if (inViewport) return true;
+                        if (isVisible) return true;
                     }
                     return false;
                 }
             """)
             if visible_editor:
-                self.log("Editor already visible in viewport, skipping CODE click", "debug")
+                self.log("Editor already visible, skipping CODE click", "debug")
                 return
         except Exception:
             pass
@@ -505,8 +503,9 @@ class PipedreamSyncer:
                             const editors = document.querySelectorAll('.monaco-editor, .cm-editor');
                             for (const editor of editors) {
                                 const rect = editor.getBoundingClientRect();
+                                const style = window.getComputedStyle(editor);
                                 if (rect.width > 100 && rect.height > 100 &&
-                                    rect.top >= 0 && rect.top < window.innerHeight) return true;
+                                    style.display !== 'none' && style.visibility !== 'hidden') return true;
                             }
                             return false;
                         }
@@ -631,14 +630,24 @@ class PipedreamSyncer:
                         const els = document.querySelectorAll(sel);
                         results[sel] = els.length;
                     });
-                    // Also count visible editors
-                    let visible = 0;
+                    // Also get detailed rect info for each editor
                     const editors = document.querySelectorAll('.monaco-editor, .cm-editor');
-                    editors.forEach(e => {
+                    const rects = [];
+                    editors.forEach((e, i) => {
                         const rect = e.getBoundingClientRect();
-                        if (rect.width > 100 && rect.height > 100) visible++;
+                        const style = window.getComputedStyle(e);
+                        rects.push({
+                            idx: i,
+                            w: Math.round(rect.width),
+                            h: Math.round(rect.height),
+                            top: Math.round(rect.top),
+                            left: Math.round(rect.left),
+                            display: style.display,
+                            visibility: style.visibility
+                        });
                     });
-                    results['visible'] = visible;
+                    results['rects'] = rects;
+                    results['viewport'] = {w: window.innerWidth, h: window.innerHeight};
                     return results;
                 }
             """)
@@ -655,10 +664,13 @@ class PipedreamSyncer:
                     const editors = document.querySelectorAll(sel);
                     for (const editor of editors) {
                         const rect = editor.getBoundingClientRect();
-                        // Check if visible: has size AND in viewport
+                        const style = window.getComputedStyle(editor);
+                        // Check if visible: has size and not hidden
+                        // Note: Don't check top >= 0 because editors in scrollable panels
+                        // can have negative top values while still being visible
                         if (rect.width > 100 && rect.height > 100 &&
-                            rect.top >= 0 && rect.left >= 0 &&
-                            rect.top < window.innerHeight) {
+                            style.display !== 'none' &&
+                            style.visibility !== 'hidden') {
                             // Mark this editor as our target
                             editor.setAttribute('data-sync-target', 'true');
                             return sel;
