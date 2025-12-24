@@ -134,7 +134,8 @@ class PipedreamSyncer:
         """
         if not PLAYWRIGHT_AVAILABLE:
             raise ImportError(
-                "Playwright not installed. Run: pip install playwright && playwright install chromium"
+                "Playwright not available. This should not happen if running via __main__. "
+                "Try: python -m src.deploy.deploy_to_pipedream"
             )
 
         self.log("Starting browser...", "debug")
@@ -1317,5 +1318,51 @@ Examples:
         sys.exit(130)
 
 
+def ensure_environment() -> bool:
+    """
+    Ensure venv exists and dependencies are installed.
+
+    Returns True if environment is ready, False if we re-launched with venv python
+    (caller should exit).
+    """
+    import subprocess
+
+    venv_dir = Path("venv")
+    venv_python = venv_dir / "bin" / "python"
+
+    # Check if we're already running from venv (check path without resolving symlinks)
+    current_python = Path(sys.executable)
+    if venv_dir.exists() and str(venv_dir.resolve()) in str(current_python):
+        # Already in venv, just ensure playwright browser is installed
+        if not PLAYWRIGHT_AVAILABLE:
+            print("Installing Playwright browser...")
+            subprocess.run([str(venv_python), "-m", "playwright", "install", "chromium"], check=True)
+        return True
+
+    # Create venv if missing
+    if not venv_dir.exists():
+        print("Creating virtual environment...")
+        subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
+
+    # Install dependencies from requirements.txt
+    print("Installing dependencies from requirements.txt...")
+    subprocess.run(
+        [str(venv_python), "-m", "pip", "install", "-q", "-r", "requirements.txt"],
+        check=True
+    )
+
+    # Install Playwright browser
+    print("Installing Playwright browser...")
+    subprocess.run([str(venv_python), "-m", "playwright", "install", "chromium"], check=True)
+
+    # Re-execute with venv python using subprocess
+    # Use -m to run as module, passing only the CLI args (not sys.argv[0] which is the script path)
+    print("Re-launching with virtual environment...\n")
+    cmd = [str(venv_python), "-m", "src.deploy.deploy_to_pipedream"] + sys.argv[1:]
+    result = subprocess.run(cmd)
+    sys.exit(result.returncode)
+
+
 if __name__ == "__main__":
+    ensure_environment()
     main()
