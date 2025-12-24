@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import datetime
 import re
 import sys
 import time
@@ -117,6 +118,15 @@ class PipedreamSyncer:
         self.page: Optional[Page] = None
         self.results: list[WorkflowResult] = []
 
+    async def __aenter__(self) -> "PipedreamSyncer":
+        """Async context manager entry - setup browser."""
+        await self.setup_browser_interactive()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Async context manager exit - guaranteed cleanup."""
+        await self.teardown_browser()
+
     def log(self, message: str, level: str = "info") -> None:
         """Print log message."""
         prefix = {"info": "", "warn": "WARNING: ", "error": "ERROR: ", "debug": "  "}
@@ -134,7 +144,8 @@ class PipedreamSyncer:
         """
         if not PLAYWRIGHT_AVAILABLE:
             raise ImportError(
-                "Playwright not installed. Run: pip install playwright && playwright install chromium"
+                "Playwright not available. This should not happen if running via __main__. "
+                "Try: python -m src.deploy.deploy_to_pipedream"
             )
 
         self.log("Starting browser...", "debug")
@@ -435,32 +446,30 @@ class PipedreamSyncer:
 
         self.log("Expanding CODE section...", "debug")
 
-        # Check if editor is already visible IN THE VIEWPORT (not just has size)
+        # Check if editor is already visible (has size and not hidden)
         try:
             visible_editor = await self.page.evaluate("""
                 () => {
                     const editors = document.querySelectorAll('.monaco-editor, .cm-editor');
                     for (const editor of editors) {
                         const rect = editor.getBoundingClientRect();
-                        // Check if editor is actually visible in viewport:
-                        // - Has size (width/height > 100)
-                        // - Top is within viewport (not negative or below viewport)
-                        // - Left is within viewport
-                        const inViewport = (
+                        const style = window.getComputedStyle(editor);
+                        // Check if editor has size and is not hidden
+                        // Note: Don't require top >= 0 because editors in scrollable
+                        // panels can have negative top while still being visible
+                        const isVisible = (
                             rect.width > 100 &&
                             rect.height > 100 &&
-                            rect.top >= 0 &&
-                            rect.top < window.innerHeight &&
-                            rect.left >= 0 &&
-                            rect.left < window.innerWidth
+                            style.display !== 'none' &&
+                            style.visibility !== 'hidden'
                         );
-                        if (inViewport) return true;
+                        if (isVisible) return true;
                     }
                     return false;
                 }
             """)
             if visible_editor:
-                self.log("Editor already visible in viewport, skipping CODE click", "debug")
+                self.log("Editor already visible, skipping CODE click", "debug")
                 return
         except Exception:
             pass
@@ -504,8 +513,9 @@ class PipedreamSyncer:
                             const editors = document.querySelectorAll('.monaco-editor, .cm-editor');
                             for (const editor of editors) {
                                 const rect = editor.getBoundingClientRect();
+                                const style = window.getComputedStyle(editor);
                                 if (rect.width > 100 && rect.height > 100 &&
-                                    rect.top >= 0 && rect.top < window.innerHeight) return true;
+                                    style.display !== 'none' && style.visibility !== 'hidden') return true;
                             }
                             return false;
                         }
@@ -630,14 +640,24 @@ class PipedreamSyncer:
                         const els = document.querySelectorAll(sel);
                         results[sel] = els.length;
                     });
-                    // Also count visible editors
-                    let visible = 0;
+                    // Also get detailed rect info for each editor
                     const editors = document.querySelectorAll('.monaco-editor, .cm-editor');
-                    editors.forEach(e => {
+                    const rects = [];
+                    editors.forEach((e, i) => {
                         const rect = e.getBoundingClientRect();
-                        if (rect.width > 100 && rect.height > 100) visible++;
+                        const style = window.getComputedStyle(e);
+                        rects.push({
+                            idx: i,
+                            w: Math.round(rect.width),
+                            h: Math.round(rect.height),
+                            top: Math.round(rect.top),
+                            left: Math.round(rect.left),
+                            display: style.display,
+                            visibility: style.visibility
+                        });
                     });
-                    results['visible'] = visible;
+                    results['rects'] = rects;
+                    results['viewport'] = {w: window.innerWidth, h: window.innerHeight};
                     return results;
                 }
             """)
@@ -645,24 +665,41 @@ class PipedreamSyncer:
         except Exception as e:
             self.log(f"  Debug check failed: {e}", "warn")
 
-        # Step 1: Find THE VISIBLE editor (not .last which is unreliable!)
-        # Mark the visible editor with a data attribute so we can target it
+        # Step 1: Find THE LARGEST visible editor (CODE editor, not config panel!)
+        # Pipedream shows multiple editors - config panel (small) and code editor (large)
+        # We must target the LARGEST one to avoid pasting into the config panel
         visible_editor = await self.page.evaluate("""
             () => {
                 const selectors = ['.monaco-editor', '.cm-editor', '.CodeMirror'];
+                let bestEditor = null;
+                let bestSel = null;
+                let maxHeight = 0;
+
                 for (const sel of selectors) {
                     const editors = document.querySelectorAll(sel);
                     for (const editor of editors) {
                         const rect = editor.getBoundingClientRect();
-                        // Check if visible: has size AND in viewport
+                        const style = window.getComputedStyle(editor);
+                        // Check if visible: has size and not hidden
+                        // Note: Don't check top >= 0 because editors in scrollable panels
+                        // can have negative top values while still being visible
                         if (rect.width > 100 && rect.height > 100 &&
-                            rect.top >= 0 && rect.left >= 0 &&
-                            rect.top < window.innerHeight) {
-                            // Mark this editor as our target
-                            editor.setAttribute('data-sync-target', 'true');
-                            return sel;
+                            style.display !== 'none' &&
+                            style.visibility !== 'hidden') {
+                            // Track the TALLEST editor (code editor > config panel)
+                            if (rect.height > maxHeight) {
+                                maxHeight = rect.height;
+                                bestEditor = editor;
+                                bestSel = sel;
+                            }
                         }
                     }
+                }
+
+                if (bestEditor) {
+                    // Mark the largest editor as our target
+                    bestEditor.setAttribute('data-sync-target', 'true');
+                    return bestSel;
                 }
                 return null;
             }
@@ -710,11 +747,25 @@ class PipedreamSyncer:
 
         # Step 3: Copy new code to clipboard and paste
         try:
-            await self.page.evaluate(f"navigator.clipboard.writeText({repr(new_code)})")
-            self.log("  Step 3a: Wrote to clipboard", "info")
+            # Prepend deploy timestamp to force Pipedream to recognize changes
+            # (Pipedream won't update if code is identical to existing)
+            # Note: Use timezone.utc for Python 3.8 compatibility (datetime.UTC is 3.11+)
+            from datetime import timezone
+            deploy_header = (
+                f"# Deployed by pipedream-automation\n"
+                f"# Timestamp: {datetime.datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n\n"
+            )
+            code_with_timestamp = deploy_header + new_code
+
+            await self.page.evaluate("(code) => navigator.clipboard.writeText(code)", code_with_timestamp)
+            self.log("  Step 3a: Wrote to clipboard (with deploy timestamp)", "info")
             await self.page.keyboard.press("ControlOrMeta+KeyV")
             await asyncio.sleep(0.5)
             self.log("  Step 3b: Pressed Cmd+V to paste", "info")
+
+            # Security: Clear clipboard after paste to prevent exposure
+            await self.page.evaluate("() => navigator.clipboard.writeText('')")
+            self.log("  Step 3c: Cleared clipboard", "debug")
 
             # Step 4: Force save with Cmd+S (clipboard paste doesn't trigger autosave)
             await self.page.keyboard.press("ControlOrMeta+KeyS")
@@ -961,34 +1012,70 @@ class PipedreamSyncer:
                 await self.click_code_tab()
                 await asyncio.sleep(1)
 
-                # Read code from VISIBLE editor (not .last which is unreliable)
-                actual_code = await self.page.evaluate("""
+                # Find the CODE editor (largest height = code, not config panel)
+                # Mark it and use clipboard to read full content
+                editor_found = await self.page.evaluate("""
                     () => {
-                        // Try multiple editor content selectors
-                        const selectors = [
-                            '.monaco-editor .view-lines',
-                            '.cm-editor .cm-content',
-                            '.CodeMirror-code'
-                        ];
-                        for (const sel of selectors) {
-                            const elements = document.querySelectorAll(sel);
-                            for (const el of elements) {
-                                const rect = el.getBoundingClientRect();
-                                // Check if visible: has size AND in viewport
-                                if (rect.width > 100 && rect.height > 50 &&
-                                    rect.top >= 0 && rect.top < window.innerHeight) {
-                                    return el.textContent || '';
+                        const cmEditors = document.querySelectorAll('.cm-editor');
+                        let bestEditor = null;
+                        let maxHeight = 0;
+
+                        for (const editor of cmEditors) {
+                            const rect = editor.getBoundingClientRect();
+                            const style = window.getComputedStyle(editor);
+                            if (rect.width > 100 && rect.height > 100 &&
+                                style.display !== 'none' &&
+                                style.visibility !== 'hidden') {
+                                // The CODE editor is the tallest one
+                                if (rect.height > maxHeight) {
+                                    maxHeight = rect.height;
+                                    bestEditor = editor;
                                 }
                             }
                         }
-                        return '';
+
+                        if (bestEditor) {
+                            bestEditor.setAttribute('data-verify-target', 'true');
+                            return true;
+                        }
+                        return false;
                     }
                 """)
+
+                if not editor_found:
+                    self.log(f"      ✗ {step_name}: Could not find editor to verify", "error")
+                    all_verified = False
+                    continue
+
+                # Click the marked editor
+                try:
+                    target = self.page.locator('[data-verify-target="true"]')
+                    await target.click(timeout=5000)
+                    await asyncio.sleep(0.3)
+                finally:
+                    await self.page.evaluate("""
+                        () => {
+                            const el = document.querySelector('[data-verify-target]');
+                            if (el) el.removeAttribute('data-verify-target');
+                        }
+                    """)
+
+                # Select all and copy to clipboard
+                await self.page.keyboard.press("ControlOrMeta+KeyA")
+                await asyncio.sleep(0.2)
+                await self.page.keyboard.press("ControlOrMeta+KeyC")
+                await asyncio.sleep(0.3)
+
+                # Read from clipboard
+                actual_code = await self.page.evaluate("navigator.clipboard.readText()")
 
                 if not actual_code:
                     self.log(f"      ✗ {step_name}: Could not read code from visible editor", "error")
                     all_verified = False
                     continue
+
+                # Debug: show what was read
+                self.log(f"      Read {len(actual_code)} chars, starts: {actual_code[:80]!r}...", "debug")
 
                 # Use UNIQUE CONTENT MARKERS (not handler names which are all "handler")
                 expected_marker = self._get_unique_marker(expected_code)
@@ -1317,5 +1404,73 @@ Examples:
         sys.exit(130)
 
 
+def ensure_environment() -> bool:
+    """
+    Ensure venv exists and dependencies are installed.
+
+    Returns True if environment is ready. If we need to re-launch with venv python,
+    this function calls sys.exit() directly and never returns.
+    """
+    import subprocess
+
+    venv_dir = Path("venv")
+    # Platform-independent venv python path
+    if sys.platform == "win32":
+        venv_python = venv_dir / "Scripts" / "python.exe"
+    else:
+        venv_python = venv_dir / "bin" / "python"
+
+    # Check if we're already running from venv (check path without resolving symlinks)
+    current_python = Path(sys.executable)
+    if venv_dir.exists() and str(venv_dir.resolve()) in str(current_python):
+        # Already in venv, just ensure playwright browser is installed
+        if not PLAYWRIGHT_AVAILABLE:
+            print("Installing Playwright browser...")
+            try:
+                subprocess.run([str(venv_python), "-m", "playwright", "install", "chromium"], check=True)
+            except subprocess.CalledProcessError as e:
+                print(f"ERROR: Failed to install Playwright browser: {e}")
+                print("Try running: python -m playwright install chromium")
+                sys.exit(1)
+        return True
+
+    try:
+        # Create venv if missing
+        if not venv_dir.exists():
+            print("Creating virtual environment...")
+            subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
+
+        # Install dependencies from requirements.txt
+        print("Installing dependencies from requirements.txt...")
+        subprocess.run(
+            [str(venv_python), "-m", "pip", "install", "-q", "-r", "requirements.txt"],
+            check=True
+        )
+
+        # Install Playwright browser
+        print("Installing Playwright browser...")
+        subprocess.run([str(venv_python), "-m", "playwright", "install", "chromium"], check=True)
+
+    except subprocess.CalledProcessError as e:
+        print(f"\nERROR: Environment setup failed: {e}")
+        print("\nPossible solutions:")
+        print("  1. Ensure Python 3.9+ is installed")
+        print("  2. Check that requirements.txt exists")
+        print("  3. Try creating venv manually: python -m venv venv")
+        sys.exit(1)
+    except FileNotFoundError as e:
+        print(f"\nERROR: Command not found: {e}")
+        print("Ensure Python is properly installed and in PATH")
+        sys.exit(1)
+
+    # Re-execute with venv python using subprocess
+    # Use -m to run as module, passing only the CLI args (not sys.argv[0] which is the script path)
+    print("Re-launching with virtual environment...\n")
+    cmd = [str(venv_python), "-m", "src.deploy.deploy_to_pipedream"] + sys.argv[1:]
+    result = subprocess.run(cmd)
+    sys.exit(result.returncode)
+
+
 if __name__ == "__main__":
+    ensure_environment()
     main()

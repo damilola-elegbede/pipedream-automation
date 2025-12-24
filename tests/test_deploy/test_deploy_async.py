@@ -134,10 +134,10 @@ class TestUpdateCodeWithMockedPage:
         # 1. First call: editor info debug
         # 2. Second call: find visible editor (returns selector)
         # 3. Third call: cleanup marker
-        # 4. Fourth call: clipboard write
+        # 4+: clipboard write calls (with argument for code)
         call_count = 0
 
-        async def mock_evaluate(script):
+        async def mock_evaluate(script, *args):
             nonlocal call_count
             call_count += 1
             if "selectors.forEach" in script:
@@ -150,7 +150,7 @@ class TestUpdateCodeWithMockedPage:
                 # Cleanup call
                 return None
             elif "clipboard.writeText" in script:
-                # Clipboard write call
+                # Clipboard write call (may have args for code parameter)
                 return None
             return None
 
@@ -202,7 +202,7 @@ class TestUpdateCodeWithMockedPage:
         mock_page = AsyncMock()
         clipboard_written = []
 
-        async def mock_evaluate(script):
+        async def mock_evaluate(script, *args):
             if "selectors.forEach" in script:
                 return {".cm-editor": 1, "visible": 1}
             elif "data-sync-target" in script and "setAttribute" in script:
@@ -210,7 +210,11 @@ class TestUpdateCodeWithMockedPage:
             elif "removeAttribute" in script:
                 return None
             elif "clipboard.writeText" in script:
-                clipboard_written.append(script)
+                # Capture the code argument if provided
+                if args:
+                    clipboard_written.append(args[0])
+                else:
+                    clipboard_written.append(script)
                 return None
             return None
 
@@ -229,8 +233,9 @@ class TestUpdateCodeWithMockedPage:
         test_code = "print('hello')"
         await syncer.update_code(test_code)
 
-        # Verify clipboard write was called
+        # Verify clipboard write was called with the code
         assert len(clipboard_written) > 0
+        # First clipboard write should be the code, second is the empty string to clear
         assert "hello" in clipboard_written[0]
 
 
