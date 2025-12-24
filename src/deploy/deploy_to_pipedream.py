@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import datetime
 import re
 import sys
 import time
@@ -746,8 +747,16 @@ class PipedreamSyncer:
 
         # Step 3: Copy new code to clipboard and paste
         try:
-            await self.page.evaluate("(code) => navigator.clipboard.writeText(code)", new_code)
-            self.log("  Step 3a: Wrote to clipboard", "info")
+            # Prepend deploy timestamp to force Pipedream to recognize changes
+            # (Pipedream won't update if code is identical to existing)
+            deploy_header = (
+                f"# Deployed by pipedream-automation\n"
+                f"# Timestamp: {datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')}\n\n"
+            )
+            code_with_timestamp = deploy_header + new_code
+
+            await self.page.evaluate("(code) => navigator.clipboard.writeText(code)", code_with_timestamp)
+            self.log("  Step 3a: Wrote to clipboard (with deploy timestamp)", "info")
             await self.page.keyboard.press("ControlOrMeta+KeyV")
             await asyncio.sleep(0.5)
             self.log("  Step 3b: Pressed Cmd+V to paste", "info")
