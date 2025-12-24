@@ -73,6 +73,58 @@ deploy_button = page.get_by_text("Deploy", exact=True).first
 await deploy_button.click()
 ```
 
+### Deploy Completion Waiting
+
+**Critical**: After clicking Deploy, the script must wait for the deploy API request to complete before navigating away. This prevents a race condition where the browser aborts the deploy request.
+
+```python
+# After clicking Deploy
+await deploy_button.click()
+
+# Wait for deploy API request to complete (prevents race condition)
+await asyncio.sleep(3)
+
+# Optionally look for "Deploying..." indicator
+try:
+    await page.wait_for_selector("text=Deploying", timeout=5000)
+except PlaywrightTimeout:
+    pass  # Proceed anyway
+
+# Then navigate to list page to verify deployment
+```
+
+**Why this matters:**
+1. Clicking Deploy triggers an async API request to Pipedream's backend
+2. If we navigate away immediately, the browser cancels pending network requests
+3. This results in "DEPLOY PENDING" status that never resolves
+4. The 3-second wait ensures the deploy request completes before navigation
+
+### Deployment Verification
+
+After deployment, the script navigates to the workflow list page to verify the deployment completed:
+
+```python
+# Navigate to workflow list
+list_url = f"https://pipedream.com/@{username}/projects/{project_id}"
+await page.goto(list_url)
+
+# Check if "DEPLOY PENDING" appears next to this workflow
+has_pending = await page.evaluate("""
+    (workflowName) => {
+        const rows = document.querySelectorAll('a[href*="/build"]');
+        for (const row of rows) {
+            const text = row.innerText || '';
+            if (text.includes(workflowName) && text.includes('DEPLOY PENDING')) {
+                return true;
+            }
+        }
+        return false;
+    }
+""", workflow_name)
+```
+
+The script polls every 3 seconds for up to 30 seconds, waiting for "DEPLOY PENDING" to clear.
+
 ## Authentication
 
 ### Google SSO Flow
@@ -144,6 +196,15 @@ https://pipedream.com/@damilolaelegbede/projects/proj_qzsZPn/gmail-to-notion-p_6
 ### Session expired
 - Delete `.env.local` and run sync again to re-authenticate
 - Or manually log in to Pipedream in the browser window
+
+### DEPLOY PENDING not clearing
+- **Root cause**: Race condition where navigation aborts the deploy API request
+- **Solution**: The script now waits 3 seconds after clicking Deploy before navigating
+- Check screenshots in `.tmp/screenshots/` for debugging:
+  - `pre-deploy-click-*.png` - State before clicking Deploy
+  - `post-deploy-click-*.png` - State after clicking Deploy (before navigation)
+  - `deploy-list-page-*.png` - Workflow list page during polling
+- If issue persists, increase wait time in `deploy_workflow()` method
 
 ## Files Modified
 
