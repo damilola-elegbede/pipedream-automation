@@ -283,9 +283,12 @@ class TestDeployWorkflow:
 
         mock_page = AsyncMock()
         mock_page.wait_for_selector = AsyncMock(return_value=mock_button)
+        # Mock evaluate to return False for DEPLOY PENDING check (no pending)
+        mock_page.evaluate = AsyncMock(return_value=False)
+        mock_page.goto = AsyncMock()
         syncer.page = mock_page
 
-        result = await syncer.deploy_workflow()
+        result = await syncer.deploy_workflow("Test Workflow")
 
         assert result is True
         mock_button.click.assert_called_once()

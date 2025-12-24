@@ -857,7 +857,7 @@ class PipedreamSyncer:
             self.log(f"  ⚠ Verification error for {step_name}: {e}", "warn")
             return False
 
-    async def deploy_workflow(self) -> bool:
+    async def deploy_workflow(self, workflow_name: str = "") -> bool:
         """Click Deploy button and wait for deployment to complete."""
         if not self.page:
             return False
@@ -896,8 +896,8 @@ class PipedreamSyncer:
                 if count > 0:
                     await deploy_button.click(timeout=5000)
                     self.log("Clicked Deploy using text locator", "info")
-                    await asyncio.sleep(2)
-                    return True
+                    # Wait for deployment to complete by checking workflow list page
+                    return await self._wait_for_deploy_completion(workflow_name, timeout=30)
             except Exception as e:
                 self.log(f"  Text locator failed: {e}", "debug")
 
@@ -920,8 +920,8 @@ class PipedreamSyncer:
                     if deploy_button:
                         await deploy_button.click()
                         self.log(f"Clicked Deploy with: {selector}", "info")
-                        await asyncio.sleep(2)
-                        return True
+                        # Wait for deployment to complete by checking workflow list page
+                        return await self._wait_for_deploy_completion(workflow_name, timeout=30)
                 except PlaywrightTimeout:
                     continue
 
@@ -933,6 +933,65 @@ class PipedreamSyncer:
         except Exception as e:
             self.log(f"Deployment error: {e}", "error")
             return False
+
+    async def _wait_for_deploy_completion(self, workflow_name: str, timeout: int = 30) -> bool:
+        """
+        Poll workflow list page for deployment completion.
+
+        After clicking Deploy, navigates to the workflow list page and checks
+        if "DEPLOY PENDING" appears next to the workflow. Waits for it to clear.
+
+        Args:
+            workflow_name: Name of the workflow to check (e.g., "Gmail to Notion")
+            timeout: Maximum seconds to wait
+
+        Returns:
+            True if deployment completed, False if still pending after timeout
+        """
+        if not self.page:
+            return False
+
+        # Build workflow list page URL
+        base = self.config.pipedream_base_url.rstrip("/")
+        username = self.config.pipedream_username
+        project_id = self.config.pipedream_project_id
+
+        if not username or not project_id:
+            self.log("  Missing username/project_id, skipping list page check", "debug")
+            await asyncio.sleep(3)  # Fallback: just wait a bit longer
+            return True
+
+        list_url = f"{base}/@{username}/projects/{project_id}"
+
+        start_time = time.time()
+        check_interval = 2.0  # Check every 2 seconds
+
+        while time.time() - start_time < timeout:
+            try:
+                # Navigate to workflow list page
+                await self.page.goto(list_url, wait_until="domcontentloaded", timeout=15000)
+                await asyncio.sleep(1)  # Brief wait for JS rendering
+
+                # Check if "DEPLOY PENDING" appears anywhere on page using evaluate
+                # (more robust with test mocks than locator API)
+                has_pending = await self.page.evaluate("""
+                    () => document.body.innerText.includes('DEPLOY PENDING')
+                """)
+
+                if not has_pending:
+                    self.log("  Deploy completed (no pending indicator on list page)", "info")
+                    return True
+
+                elapsed = int(time.time() - start_time)
+                self.log(f"  Deploy pending, waiting... ({elapsed}s)", "debug")
+
+            except Exception as e:
+                self.log(f"  Error checking deploy status: {e}", "debug")
+
+            await asyncio.sleep(check_interval)
+
+        self.log(f"  Deploy still pending after {timeout}s timeout", "warning")
+        return False
 
     def _get_unique_marker(self, code: str) -> str:
         """Extract a unique identifying marker from the code.
@@ -1209,7 +1268,7 @@ class PipedreamSyncer:
 
             # Deploy the workflow after all steps are synced
             if result.status in ["success", "partial"]:
-                deployed = await self.deploy_workflow()
+                deployed = await self.deploy_workflow(workflow.name)
                 if deployed:
                     print(f"    Deployed {workflow_key}")
 
