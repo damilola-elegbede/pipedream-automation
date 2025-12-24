@@ -974,34 +974,70 @@ class PipedreamSyncer:
                 await self.click_code_tab()
                 await asyncio.sleep(1)
 
-                # Read code from VISIBLE editor (not .last which is unreliable)
-                actual_code = await self.page.evaluate("""
+                # Find the CODE editor (largest height = code, not config panel)
+                # Mark it and use clipboard to read full content
+                editor_found = await self.page.evaluate("""
                     () => {
-                        // Try multiple editor content selectors
-                        const selectors = [
-                            '.monaco-editor .view-lines',
-                            '.cm-editor .cm-content',
-                            '.CodeMirror-code'
-                        ];
-                        for (const sel of selectors) {
-                            const elements = document.querySelectorAll(sel);
-                            for (const el of elements) {
-                                const rect = el.getBoundingClientRect();
-                                // Check if visible: has size AND in viewport
-                                if (rect.width > 100 && rect.height > 50 &&
-                                    rect.top >= 0 && rect.top < window.innerHeight) {
-                                    return el.textContent || '';
+                        const cmEditors = document.querySelectorAll('.cm-editor');
+                        let bestEditor = null;
+                        let maxHeight = 0;
+
+                        for (const editor of cmEditors) {
+                            const rect = editor.getBoundingClientRect();
+                            const style = window.getComputedStyle(editor);
+                            if (rect.width > 100 && rect.height > 100 &&
+                                style.display !== 'none' &&
+                                style.visibility !== 'hidden') {
+                                // The CODE editor is the tallest one
+                                if (rect.height > maxHeight) {
+                                    maxHeight = rect.height;
+                                    bestEditor = editor;
                                 }
                             }
                         }
-                        return '';
+
+                        if (bestEditor) {
+                            bestEditor.setAttribute('data-verify-target', 'true');
+                            return true;
+                        }
+                        return false;
                     }
                 """)
+
+                if not editor_found:
+                    self.log(f"      ✗ {step_name}: Could not find editor to verify", "error")
+                    all_verified = False
+                    continue
+
+                # Click the marked editor
+                try:
+                    target = self.page.locator('[data-verify-target="true"]')
+                    await target.click(timeout=5000)
+                    await asyncio.sleep(0.3)
+                finally:
+                    await self.page.evaluate("""
+                        () => {
+                            const el = document.querySelector('[data-verify-target]');
+                            if (el) el.removeAttribute('data-verify-target');
+                        }
+                    """)
+
+                # Select all and copy to clipboard
+                await self.page.keyboard.press("ControlOrMeta+KeyA")
+                await asyncio.sleep(0.2)
+                await self.page.keyboard.press("ControlOrMeta+KeyC")
+                await asyncio.sleep(0.3)
+
+                # Read from clipboard
+                actual_code = await self.page.evaluate("navigator.clipboard.readText()")
 
                 if not actual_code:
                     self.log(f"      ✗ {step_name}: Could not read code from visible editor", "error")
                     all_verified = False
                     continue
+
+                # Debug: show what was read
+                self.log(f"      Read {len(actual_code)} chars, starts: {actual_code[:80]!r}...", "debug")
 
                 # Use UNIQUE CONTENT MARKERS (not handler names which are all "handler")
                 expected_marker = self._get_unique_marker(expected_code)
