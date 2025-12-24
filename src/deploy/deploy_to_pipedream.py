@@ -896,8 +896,8 @@ class PipedreamSyncer:
                 if count > 0:
                     await deploy_button.click(timeout=5000)
                     self.log("Clicked Deploy using text locator", "info")
-                    await asyncio.sleep(2)
-                    return True
+                    # Wait for deployment to complete (not just click)
+                    return await self._wait_for_deploy_completion(timeout=30)
             except Exception as e:
                 self.log(f"  Text locator failed: {e}", "debug")
 
@@ -920,8 +920,8 @@ class PipedreamSyncer:
                     if deploy_button:
                         await deploy_button.click()
                         self.log(f"Clicked Deploy with: {selector}", "info")
-                        await asyncio.sleep(2)
-                        return True
+                        # Wait for deployment to complete (not just click)
+                        return await self._wait_for_deploy_completion(timeout=30)
                 except PlaywrightTimeout:
                     continue
 
@@ -933,6 +933,53 @@ class PipedreamSyncer:
         except Exception as e:
             self.log(f"Deployment error: {e}", "error")
             return False
+
+    async def _wait_for_deploy_completion(self, timeout: int = 30) -> bool:
+        """
+        Poll for deployment completion.
+
+        Waits for DEPLOY PENDING indicator to disappear.
+
+        Args:
+            timeout: Maximum seconds to wait
+
+        Returns:
+            True if deployment completed, False if still pending after timeout
+        """
+        if not self.page:
+            return False
+
+        start_time = time.time()
+        check_interval = 1.0  # Check every second
+
+        # Selectors for deployment pending states
+        pending_indicators = [
+            "text='DEPLOY PENDING'",
+            "text='Deploying'",
+        ]
+
+        while time.time() - start_time < timeout:
+            # Check if any pending indicator is visible
+            pending_found = False
+            for selector in pending_indicators:
+                try:
+                    count = await self.page.locator(selector).count()
+                    if count > 0:
+                        pending_found = True
+                        break
+                except Exception:
+                    pass
+
+            if not pending_found:
+                self.log("  Deploy completed (no pending indicator)", "debug")
+                return True
+
+            elapsed = int(time.time() - start_time)
+            self.log(f"  Deploy pending, waiting... ({elapsed}s)", "debug")
+            await asyncio.sleep(check_interval)
+
+        self.log(f"  Deploy still pending after {timeout}s timeout", "warning")
+        return False
 
     def _get_unique_marker(self, code: str) -> str:
         """Extract a unique identifying marker from the code.
