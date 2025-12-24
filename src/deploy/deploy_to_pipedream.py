@@ -749,9 +749,11 @@ class PipedreamSyncer:
         try:
             # Prepend deploy timestamp to force Pipedream to recognize changes
             # (Pipedream won't update if code is identical to existing)
+            # Note: Use timezone.utc for Python 3.8 compatibility (datetime.UTC is 3.11+)
+            from datetime import timezone
             deploy_header = (
                 f"# Deployed by pipedream-automation\n"
-                f"# Timestamp: {datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')}\n\n"
+                f"# Timestamp: {datetime.datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n\n"
             )
             code_with_timestamp = deploy_header + new_code
 
