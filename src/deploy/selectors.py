@@ -10,14 +10,11 @@ If deployment starts failing, inspect the Pipedream UI to update these selectors
 
 import re
 
+from .exceptions import ValidationError
+
 # Validation patterns for workflow/step identifiers
 VALID_STEP_NAME = re.compile(r'^[a-zA-Z0-9_\-\s]{1,100}$')
 VALID_WORKFLOW_ID = re.compile(r'^[a-zA-Z0-9_\-]{1,100}$')
-
-
-class ValidationError(ValueError):
-    """Raised when input validation fails."""
-    pass
 
 
 def validate_step_name(name: str) -> str:

@@ -1408,8 +1408,8 @@ def ensure_environment() -> bool:
     """
     Ensure venv exists and dependencies are installed.
 
-    Returns True if environment is ready, False if we re-launched with venv python
-    (caller should exit).
+    Returns True if environment is ready. If we need to re-launch with venv python,
+    this function calls sys.exit() directly and never returns.
     """
     import subprocess
 

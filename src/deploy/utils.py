@@ -288,9 +288,11 @@ def read_script_content(script_path: str, base_path: Optional[Path] = None) -> s
     full_path = (base / script_path).resolve()
     base_resolved = base.resolve()
 
-    # Security: Prevent path traversal attacks
-    if not str(full_path).startswith(str(base_resolved)):
-        raise ValueError(f"Path traversal detected: {script_path}")
+    # Security: Prevent path traversal attacks using proper path containment check
+    try:
+        full_path.relative_to(base_resolved)
+    except ValueError:
+        raise ValueError(f"Path traversal detected: {script_path}") from None
 
     if not full_path.exists():
         raise FileNotFoundError(f"Script not found: {script_path}")
