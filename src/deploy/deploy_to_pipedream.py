@@ -889,6 +889,10 @@ class PipedreamSyncer:
             except Exception as e:
                 self.log(f"  Deploy element scan failed: {e}", "warn")
 
+            # Take screenshot before clicking Deploy to capture current state
+            safe_name = workflow_name.replace(" ", "_").replace("/", "_")[:30] if workflow_name else "unknown"
+            await self.take_screenshot(f"pre-deploy-click-{safe_name}")
+
             # Try using Playwright's text locator first (most reliable)
             try:
                 deploy_button = self.page.get_by_text("Deploy", exact=True).first
@@ -896,6 +900,23 @@ class PipedreamSyncer:
                 if count > 0:
                     await deploy_button.click(timeout=5000)
                     self.log("Clicked Deploy using text locator", "info")
+
+                    # Wait on edit page for deploy API request to complete
+                    # This prevents the race condition where navigation aborts the request
+                    self.log("  Waiting for deploy request to complete...", "info")
+                    await asyncio.sleep(3)
+
+                    # Look for visual confirmation of deploy initiation
+                    try:
+                        await self.page.wait_for_selector("text=Deploying", timeout=5000)
+                        self.log("  Deploy initiated (saw 'Deploying' indicator)", "info")
+                    except PlaywrightTimeout:
+                        self.log("  No 'Deploying' indicator found, proceeding anyway", "debug")
+
+                    # Take screenshot to capture post-click state for debugging
+                    safe_name = workflow_name.replace(" ", "_").replace("/", "_")[:30] if workflow_name else "unknown"
+                    await self.take_screenshot(f"post-deploy-click-{safe_name}")
+
                     # Wait for deployment to complete by checking workflow list page
                     return await self._wait_for_deploy_completion(workflow_name, timeout=30)
             except Exception as e:
@@ -920,6 +941,23 @@ class PipedreamSyncer:
                     if deploy_button:
                         await deploy_button.click()
                         self.log(f"Clicked Deploy with: {selector}", "info")
+
+                        # Wait on edit page for deploy API request to complete
+                        # This prevents the race condition where navigation aborts the request
+                        self.log("  Waiting for deploy request to complete...", "info")
+                        await asyncio.sleep(3)
+
+                        # Look for visual confirmation of deploy initiation
+                        try:
+                            await self.page.wait_for_selector("text=Deploying", timeout=5000)
+                            self.log("  Deploy initiated (saw 'Deploying' indicator)", "info")
+                        except PlaywrightTimeout:
+                            self.log("  No 'Deploying' indicator found, proceeding anyway", "debug")
+
+                        # Take screenshot to capture post-click state for debugging
+                        safe_name = workflow_name.replace(" ", "_").replace("/", "_")[:30] if workflow_name else "unknown"
+                        await self.take_screenshot(f"post-deploy-click-{safe_name}")
+
                         # Wait for deployment to complete by checking workflow list page
                         return await self._wait_for_deploy_completion(workflow_name, timeout=30)
                 except PlaywrightTimeout:
@@ -962,15 +1000,40 @@ class PipedreamSyncer:
             return True
 
         list_url = f"{base}/@{username}/projects/{project_id}"
+        self.log(f"  Checking workflow list at: {list_url}", "info")
+        self.log(f"  Looking for workflow: '{workflow_name}'", "info")
 
         start_time = time.time()
         check_interval = 3.0  # Check every 3 seconds
+        first_poll = True
 
         while time.time() - start_time < timeout:
             try:
                 # Navigate to workflow list page
                 await self.page.goto(list_url, wait_until="domcontentloaded", timeout=15000)
                 await asyncio.sleep(1.5)  # Wait for JS rendering
+
+                # Take screenshot on first poll to debug workflow list
+                if first_poll:
+                    safe_name = workflow_name.replace(" ", "_").replace("/", "_")[:30] if workflow_name else "unknown"
+                    await self.take_screenshot(f"deploy-list-page-{safe_name}")
+
+                    # Log all visible workflows for debugging
+                    try:
+                        workflows_on_page = await self.page.evaluate("""
+                            () => {
+                                const rows = document.querySelectorAll('a[href*="/build"], [class*="workflow"], tr, [role="row"]');
+                                return [...rows].slice(0, 10).map(row => {
+                                    const text = (row.innerText || row.textContent || '').trim();
+                                    return text.substring(0, 100);  // First 100 chars
+                                });
+                            }
+                        """)
+                        self.log(f"  Workflows visible on page: {workflows_on_page}", "info")
+                    except Exception as e:
+                        self.log(f"  Could not list workflows: {e}", "debug")
+
+                    first_poll = False
 
                 # Check if this specific workflow has "DEPLOY PENDING" next to it
                 # We look for the workflow name and check if DEPLOY PENDING is nearby

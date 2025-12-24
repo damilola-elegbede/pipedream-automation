@@ -78,7 +78,7 @@ settings:
   autosave_wait: 3
 
   # Run in headless mode (true for CI, false for debugging)
-  headless: true
+  headless: false
 
   # Screenshot configuration
   screenshot_on_failure: true
