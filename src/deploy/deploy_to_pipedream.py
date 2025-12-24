@@ -934,16 +934,16 @@ class PipedreamSyncer:
             self.log(f"Deployment error: {e}", "error")
             return False
 
-    async def _wait_for_deploy_completion(self, workflow_name: str, timeout: int = 30) -> bool:
+    async def _wait_for_deploy_completion(self, workflow_name: str, timeout: int = 45) -> bool:
         """
         Poll workflow list page for deployment completion.
 
         After clicking Deploy, navigates to the workflow list page and checks
-        if "DEPLOY PENDING" appears next to the workflow. Waits for it to clear.
+        if "DEPLOY PENDING" appears next to the specific workflow. Waits for it to clear.
 
         Args:
             workflow_name: Name of the workflow to check (e.g., "Gmail to Notion")
-            timeout: Maximum seconds to wait
+            timeout: Maximum seconds to wait (default 45s for larger workflows)
 
         Returns:
             True if deployment completed, False if still pending after timeout
@@ -964,26 +964,49 @@ class PipedreamSyncer:
         list_url = f"{base}/@{username}/projects/{project_id}"
 
         start_time = time.time()
-        check_interval = 2.0  # Check every 2 seconds
+        check_interval = 3.0  # Check every 3 seconds
 
         while time.time() - start_time < timeout:
             try:
                 # Navigate to workflow list page
                 await self.page.goto(list_url, wait_until="domcontentloaded", timeout=15000)
-                await asyncio.sleep(1)  # Brief wait for JS rendering
+                await asyncio.sleep(1.5)  # Wait for JS rendering
 
-                # Check if "DEPLOY PENDING" appears anywhere on page using evaluate
-                # (more robust with test mocks than locator API)
+                # Check if this specific workflow has "DEPLOY PENDING" next to it
+                # We look for the workflow name and check if DEPLOY PENDING is nearby
                 has_pending = await self.page.evaluate("""
-                    () => document.body.innerText.includes('DEPLOY PENDING')
-                """)
+                    (workflowName) => {
+                        // Find all workflow rows/cards on the page
+                        const rows = document.querySelectorAll('a[href*="/build"], [class*="workflow"], tr, [role="row"]');
+                        for (const row of rows) {
+                            const text = row.innerText || row.textContent || '';
+                            // Check if this row contains both the workflow name and DEPLOY PENDING
+                            if (text.includes(workflowName) && text.includes('DEPLOY PENDING')) {
+                                return true;
+                            }
+                        }
+                        // Fallback: check if the workflow name appears near DEPLOY PENDING in page text
+                        const pageText = document.body.innerText || '';
+                        // Look for pattern: workflow name within 200 chars of DEPLOY PENDING
+                        const pendingIndex = pageText.indexOf('DEPLOY PENDING');
+                        if (pendingIndex === -1) {
+                            return false;  // No pending deployments at all
+                        }
+                        const nameIndex = pageText.indexOf(workflowName);
+                        if (nameIndex === -1) {
+                            return false;  // Workflow not found, assume OK
+                        }
+                        // Check if they're close together (same row)
+                        return Math.abs(pendingIndex - nameIndex) < 200;
+                    }
+                """, workflow_name)
 
                 if not has_pending:
-                    self.log("  Deploy completed (no pending indicator on list page)", "info")
+                    self.log("  Deploy completed (no pending indicator for this workflow)", "info")
                     return True
 
                 elapsed = int(time.time() - start_time)
-                self.log(f"  Deploy pending, waiting... ({elapsed}s)", "debug")
+                self.log(f"    Deploy pending, waiting... ({elapsed}s)", "debug")
 
             except Exception as e:
                 self.log(f"  Error checking deploy status: {e}", "debug")
