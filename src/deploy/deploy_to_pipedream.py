@@ -664,11 +664,16 @@ class PipedreamSyncer:
         except Exception as e:
             self.log(f"  Debug check failed: {e}", "warn")
 
-        # Step 1: Find THE VISIBLE editor (not .last which is unreliable!)
-        # Mark the visible editor with a data attribute so we can target it
+        # Step 1: Find THE LARGEST visible editor (CODE editor, not config panel!)
+        # Pipedream shows multiple editors - config panel (small) and code editor (large)
+        # We must target the LARGEST one to avoid pasting into the config panel
         visible_editor = await self.page.evaluate("""
             () => {
                 const selectors = ['.monaco-editor', '.cm-editor', '.CodeMirror'];
+                let bestEditor = null;
+                let bestSel = null;
+                let maxHeight = 0;
+
                 for (const sel of selectors) {
                     const editors = document.querySelectorAll(sel);
                     for (const editor of editors) {
@@ -680,11 +685,20 @@ class PipedreamSyncer:
                         if (rect.width > 100 && rect.height > 100 &&
                             style.display !== 'none' &&
                             style.visibility !== 'hidden') {
-                            // Mark this editor as our target
-                            editor.setAttribute('data-sync-target', 'true');
-                            return sel;
+                            // Track the TALLEST editor (code editor > config panel)
+                            if (rect.height > maxHeight) {
+                                maxHeight = rect.height;
+                                bestEditor = editor;
+                                bestSel = sel;
+                            }
                         }
                     }
+                }
+
+                if (bestEditor) {
+                    // Mark the largest editor as our target
+                    bestEditor.setAttribute('data-sync-target', 'true');
+                    return bestSel;
                 }
                 return null;
             }
