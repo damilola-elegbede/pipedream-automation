@@ -279,9 +279,18 @@ def read_script_content(script_path: str, base_path: Optional[Path] = None) -> s
 
     Returns:
         Script content as string
+
+    Raises:
+        ValueError: If path traversal is detected
+        FileNotFoundError: If script doesn't exist
     """
     base = base_path or Path.cwd()
-    full_path = base / script_path
+    full_path = (base / script_path).resolve()
+    base_resolved = base.resolve()
+
+    # Security: Prevent path traversal attacks
+    if not str(full_path).startswith(str(base_resolved)):
+        raise ValueError(f"Path traversal detected: {script_path}")
 
     if not full_path.exists():
         raise FileNotFoundError(f"Script not found: {script_path}")

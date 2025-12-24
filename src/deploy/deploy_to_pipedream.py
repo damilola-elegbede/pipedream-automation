@@ -117,6 +117,15 @@ class PipedreamSyncer:
         self.page: Optional[Page] = None
         self.results: list[WorkflowResult] = []
 
+    async def __aenter__(self) -> "PipedreamSyncer":
+        """Async context manager entry - setup browser."""
+        await self.setup_browser_interactive()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Async context manager exit - guaranteed cleanup."""
+        await self.teardown_browser()
+
     def log(self, message: str, level: str = "info") -> None:
         """Print log message."""
         prefix = {"info": "", "warn": "WARNING: ", "error": "ERROR: ", "debug": "  "}
@@ -723,11 +732,15 @@ class PipedreamSyncer:
 
         # Step 3: Copy new code to clipboard and paste
         try:
-            await self.page.evaluate(f"navigator.clipboard.writeText({repr(new_code)})")
+            await self.page.evaluate("(code) => navigator.clipboard.writeText(code)", new_code)
             self.log("  Step 3a: Wrote to clipboard", "info")
             await self.page.keyboard.press("ControlOrMeta+KeyV")
             await asyncio.sleep(0.5)
             self.log("  Step 3b: Pressed Cmd+V to paste", "info")
+
+            # Security: Clear clipboard after paste to prevent exposure
+            await self.page.evaluate("() => navigator.clipboard.writeText('')")
+            self.log("  Step 3c: Cleared clipboard", "debug")
 
             # Step 4: Force save with Cmd+S (clipboard paste doesn't trigger autosave)
             await self.page.keyboard.press("ControlOrMeta+KeyS")
@@ -1376,7 +1389,11 @@ def ensure_environment() -> bool:
     import subprocess
 
     venv_dir = Path("venv")
-    venv_python = venv_dir / "bin" / "python"
+    # Platform-independent venv python path
+    if sys.platform == "win32":
+        venv_python = venv_dir / "Scripts" / "python.exe"
+    else:
+        venv_python = venv_dir / "bin" / "python"
 
     # Check if we're already running from venv (check path without resolving symlinks)
     current_python = Path(sys.executable)
@@ -1384,24 +1401,42 @@ def ensure_environment() -> bool:
         # Already in venv, just ensure playwright browser is installed
         if not PLAYWRIGHT_AVAILABLE:
             print("Installing Playwright browser...")
-            subprocess.run([str(venv_python), "-m", "playwright", "install", "chromium"], check=True)
+            try:
+                subprocess.run([str(venv_python), "-m", "playwright", "install", "chromium"], check=True)
+            except subprocess.CalledProcessError as e:
+                print(f"ERROR: Failed to install Playwright browser: {e}")
+                print("Try running: python -m playwright install chromium")
+                sys.exit(1)
         return True
 
-    # Create venv if missing
-    if not venv_dir.exists():
-        print("Creating virtual environment...")
-        subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
+    try:
+        # Create venv if missing
+        if not venv_dir.exists():
+            print("Creating virtual environment...")
+            subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
 
-    # Install dependencies from requirements.txt
-    print("Installing dependencies from requirements.txt...")
-    subprocess.run(
-        [str(venv_python), "-m", "pip", "install", "-q", "-r", "requirements.txt"],
-        check=True
-    )
+        # Install dependencies from requirements.txt
+        print("Installing dependencies from requirements.txt...")
+        subprocess.run(
+            [str(venv_python), "-m", "pip", "install", "-q", "-r", "requirements.txt"],
+            check=True
+        )
 
-    # Install Playwright browser
-    print("Installing Playwright browser...")
-    subprocess.run([str(venv_python), "-m", "playwright", "install", "chromium"], check=True)
+        # Install Playwright browser
+        print("Installing Playwright browser...")
+        subprocess.run([str(venv_python), "-m", "playwright", "install", "chromium"], check=True)
+
+    except subprocess.CalledProcessError as e:
+        print(f"\nERROR: Environment setup failed: {e}")
+        print("\nPossible solutions:")
+        print("  1. Ensure Python 3.9+ is installed")
+        print("  2. Check that requirements.txt exists")
+        print("  3. Try creating venv manually: python -m venv venv")
+        sys.exit(1)
+    except FileNotFoundError as e:
+        print(f"\nERROR: Command not found: {e}")
+        print("Ensure Python is properly installed and in PATH")
+        sys.exit(1)
 
     # Re-execute with venv python using subprocess
     # Use -m to run as module, passing only the CLI args (not sys.argv[0] which is the script path)

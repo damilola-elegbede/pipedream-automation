@@ -8,6 +8,37 @@ IMPORTANT: These selectors were created based on Pipedream's UI as of December 2
 If deployment starts failing, inspect the Pipedream UI to update these selectors.
 """
 
+import re
+
+# Validation patterns for workflow/step identifiers
+VALID_STEP_NAME = re.compile(r'^[a-zA-Z0-9_\-\s]{1,100}$')
+VALID_WORKFLOW_ID = re.compile(r'^[a-zA-Z0-9_\-]{1,100}$')
+
+
+class ValidationError(ValueError):
+    """Raised when input validation fails."""
+    pass
+
+
+def validate_step_name(name: str) -> str:
+    """Validate step name format to prevent selector injection."""
+    if not VALID_STEP_NAME.match(name):
+        raise ValidationError(
+            f"Invalid step name format: '{name}'. "
+            "Must be 1-100 alphanumeric characters, underscores, hyphens, or spaces."
+        )
+    return name
+
+
+def validate_workflow_id(workflow_id: str) -> str:
+    """Validate workflow ID format to prevent URL injection."""
+    if not VALID_WORKFLOW_ID.match(workflow_id):
+        raise ValidationError(
+            f"Invalid workflow ID format: '{workflow_id}'. "
+            "Must be 1-100 alphanumeric characters, underscores, or hyphens."
+        )
+    return workflow_id
+
 # =============================================================================
 # Authentication Selectors
 # =============================================================================
@@ -52,8 +83,14 @@ def step_by_name(name: str) -> str:
 
     Updated December 2024: Pipedream's DOM structure uses div containers
     with step names displayed as text. We use text-based selectors as primary.
+
+    Raises:
+        ValidationError: If step name contains invalid characters
     """
-    # Escape special characters to prevent selector injection
+    # Validate step name format first
+    validate_step_name(name)
+
+    # Escape special characters for selector syntax
     # Escape single quotes for :has-text() selectors
     escaped_single = name.replace("'", "\\'")
     # Escape double quotes for CSS attribute selectors
@@ -163,7 +200,12 @@ def workflow_url(
     username: str = "",
     project_id: str = ""
 ) -> str:
-    """Generate the URL for a workflow's page."""
+    """Generate the URL for a workflow's page.
+
+    Raises:
+        ValidationError: If workflow_id contains invalid characters
+    """
+    validate_workflow_id(workflow_id)
     base = base_url.rstrip("/")
     if username and project_id:
         # New format: /@username/projects/project_id/workflow-slug/inspect
@@ -178,7 +220,12 @@ def workflow_edit_url(
     username: str = "",
     project_id: str = ""
 ) -> str:
-    """Generate the URL for a workflow's build/edit page."""
+    """Generate the URL for a workflow's build/edit page.
+
+    Raises:
+        ValidationError: If workflow_id contains invalid characters
+    """
+    validate_workflow_id(workflow_id)
     base = base_url.rstrip("/")
     if username and project_id:
         # New format: /@username/projects/project_id/workflow-slug/build
