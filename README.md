@@ -1,13 +1,13 @@
-# Pipedream Automation - Gmail, Notion & Google Calendar
+# Pipedream Automation - Gmail, Notion & Google Tasks
 
-This repository contains Python workflow steps for Pipedream that automate tasks between Gmail, Notion, and Google Calendar.
+This repository contains Python workflow steps for Pipedream that automate tasks between Gmail, Notion, and Google Tasks.
 
 ## Overview
 
 The integrations provide:
 - **Gmail → Notion**: Automatically create Notion tasks from labeled emails
-- **Notion → Google Calendar**: Create calendar events from Notion tasks with due dates
-- **Google Calendar → Notion**: Sync calendar updates back to Notion tasks
+- **Notion → Google Tasks**: Create Google Tasks from Notion tasks with due dates
+- **Google Tasks → Notion**: Sync task completion status back to Notion
 
 ## Project Structure
 
@@ -18,9 +18,9 @@ The integrations provide:
 │       ├── fetch_gmail_emails.py # Fetch emails by label from Gmail
 │       ├── create_notion_task.py # Create Notion tasks from emails
 │       ├── label_gmail_processed.py # Label processed emails
-│       ├── notion_task_to_gcal.py # Create GCal events from Notion tasks
-│       ├── notion_update_to_gcal.py # Update GCal events from Notion changes
-│       └── gcal_event_to_notion.py # Sync GCal changes to Notion
+│       ├── notion_task_to_google.py # Create Google Tasks from Notion tasks
+│       ├── notion_update_to_google.py # Update Google Tasks from Notion changes
+│       └── google_to_notion.py   # Sync Google Task changes to Notion
 ├── tests/                        # Test suite
 ├── docs/                         # Additional documentation
 └── .github/workflows/            # CI/CD pipeline
@@ -36,14 +36,14 @@ Each file in `src/steps/` is a self-contained Python script designed to be copie
 2. **create_notion_task.py** - Creates Notion database entries from email data, with duplicate detection
 3. **label_gmail_processed.py** - Labels processed emails to prevent re-processing
 
-### Notion to Google Calendar Workflow
+### Notion to Google Tasks Workflow
 
-4. **notion_task_to_gcal.py** - Prepares Notion task data for creating Google Calendar events
-5. **notion_update_to_gcal.py** - Handles Notion updates to sync to existing calendar events
+4. **notion_task_to_google.py** - Prepares Notion task data for creating Google Tasks
+5. **notion_update_to_google.py** - Handles Notion updates to sync to existing Google Tasks (including completion status)
 
-### Google Calendar to Notion Sync
+### Google Tasks to Notion Sync
 
-6. **gcal_event_to_notion.py** - Extracts Notion page IDs from calendar events for reverse sync
+6. **google_to_notion.py** - Syncs Google Task changes (completion status, due dates) back to Notion
 
 ## Setup
 
@@ -53,7 +53,7 @@ Each file in `src/steps/` is a self-contained Python script designed to be copie
 - Pipedream account with connected:
   - Gmail (with `gmail.readonly` and `gmail.modify` scopes)
   - Notion (OAuth connection)
-  - Google Calendar (for calendar workflows)
+  - Google Tasks (for task sync workflows)
 
 ### Environment Variables in Pipedream
 
@@ -121,17 +121,17 @@ The `create_notion_task.py` step includes duplicate detection:
 - Failed operations are tracked and reported
 - Partial successes are handled (some emails succeed, some fail)
 
-### Idempotent Calendar Events
+### Bidirectional Completion Sync
 
-- `notion_task_to_gcal.py` generates deterministic event IDs from Notion Page IDs
-- Prevents duplicate calendar events on workflow retries
-- Update flow uses `CreateIfMissing` flag to handle deleted events (404)
+- **Notion → Google Tasks**: "List" field set to "Completed" marks Google Task as complete
+- **Google Tasks → Notion**: Completing a task in Google Tasks sets Notion "List" to "Completed"
+- Tasks use the `notes` field to store Notion URL for reverse sync identification
 
 ### Efficient API Usage
 
 - Gmail Batch API for labeling (up to 100 messages per request)
 - Pipedream Data Store caching for label IDs
-- Timezone-aware calendar events (America/Denver)
+- RFC 3339 date format for Google Tasks compatibility
 
 ### Pagination Limits
 
