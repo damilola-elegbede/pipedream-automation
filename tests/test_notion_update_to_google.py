@@ -58,7 +58,7 @@ class TestHandler:
             }
         }
 
-        result = handler(mock_pd)
+        handler(mock_pd)
 
         assert mock_pd.flow.exit_called is True
         assert "Due Date is missing" in mock_pd.flow.exit_message
@@ -81,7 +81,7 @@ class TestHandler:
             }
         }
 
-        result = handler(mock_pd)
+        handler(mock_pd)
 
         assert mock_pd.flow.exit_called is True
         assert "Google Task ID is missing" in mock_pd.flow.exit_message

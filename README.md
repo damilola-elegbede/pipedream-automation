@@ -68,7 +68,7 @@ Set these in **Pipedream Settings → Environment Variables**:
 ### Deploying to Pipedream
 
 1. Create a new Pipedream workflow
-2. Add a trigger (Gmail, Notion webhook, or Google Calendar)
+2. Add a trigger (Gmail, Notion webhook, or Google Tasks)
 3. Add a Python code step
 4. Copy the contents of the appropriate `src/steps/*.py` file
 5. Configure the step inputs (connect accounts)

@@ -44,7 +44,7 @@ def safe_get(data, keys, default=None):
             if current is None:
                 return default
 
-        except (TypeError, IndexError) as e:
+        except (TypeError, IndexError, AttributeError) as e:
             logger.warning(f"Error accessing key '{key}': {e}")
             return default
     return current
@@ -85,12 +85,7 @@ def handler(pd: "pipedream"):
     due_date_start = safe_get(due_date_obj, ["start"])
 
     # Task Name information
-    task_name_list = safe_get(properties, ["Task name", "title"], default=[])
-    task_name = ""
-    if task_name_list:
-        task_name = safe_get(task_name_list, [0, "plain_text"], default="Untitled Task")
-    else:
-        task_name = "Untitled Task"
+    task_name = safe_get(properties, ["Task name", "title", 0, "plain_text"], default="Untitled Task")
 
     # Google Task ID information (check if task already synced)
     google_task_id_list = safe_get(properties, ["Google Task ID", "rich_text"], default=[])

@@ -89,7 +89,7 @@ class TestHandler:
             }
         }
 
-        result = handler(mock_pd)
+        handler(mock_pd)
 
         assert mock_pd.flow.exit_called is True
         assert "does not have a Notion URL" in mock_pd.flow.exit_message
@@ -103,7 +103,7 @@ class TestHandler:
             }
         }
 
-        result = handler(mock_pd)
+        handler(mock_pd)
 
         assert mock_pd.flow.exit_called is True
 
@@ -149,7 +149,7 @@ class TestHandler:
             }
         }
 
-        result = handler(mock_pd)
+        handler(mock_pd)
 
         assert mock_pd.flow.exit_called is True
         assert "Could not reliably extract" in mock_pd.flow.exit_message

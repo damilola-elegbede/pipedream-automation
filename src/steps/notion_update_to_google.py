@@ -44,7 +44,7 @@ def safe_get(data, keys, default=None):
             if current is None:
                 return default
 
-        except (TypeError, IndexError) as e:
+        except (TypeError, IndexError, AttributeError) as e:
             logger.warning(f"Error accessing key '{key}': {e}")
             return default
     return current

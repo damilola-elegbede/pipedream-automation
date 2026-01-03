@@ -98,7 +98,7 @@ def extract_notion_page_id(text):
                     if len(potential_id) >= 20 and all(c in '0123456789abcdefABCDEF' for c in potential_id):
                         return potential_id
     except Exception:
-        pass
+        logger.debug("Fallback extraction failed for Notion URL", exc_info=True)
 
     return None
 
