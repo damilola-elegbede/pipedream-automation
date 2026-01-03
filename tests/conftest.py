@@ -165,3 +165,96 @@ def sample_successful_mappings():
         ],
         "errors": []
     }
+
+
+# Google Tasks fixtures
+
+@pytest.fixture
+def sample_notion_task_trigger_gtask():
+    """Sample Notion task trigger for Google Tasks (no existing Task ID)."""
+    return {
+        "trigger": {
+            "event": {
+                "id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",  # 32-char hex Notion page ID
+                "properties": {
+                    "Task name": {
+                        "title": [{"plain_text": "Test Task"}]
+                    },
+                    "Due Date": {
+                        "date": {
+                            "start": "2024-01-20",
+                            "end": None
+                        }
+                    },
+                    "Google Task ID": {
+                        "rich_text": []  # Empty means no task yet
+                    },
+                    "List": {
+                        "select": {"name": "Next Action"}
+                    }
+                },
+                "url": "https://www.notion.so/Test-Task-abc123def456"
+            }
+        }
+    }
+
+
+@pytest.fixture
+def sample_notion_update_trigger_gtask():
+    """Sample Notion update trigger with existing Google Task ID."""
+    return {
+        "trigger": {
+            "event": {
+                "page": {
+                    "properties": {
+                        "Task name": {
+                            "title": [{"plain_text": "Updated Task"}]
+                        },
+                        "Due Date": {
+                            "date": {
+                                "start": "2024-01-22",
+                                "end": None
+                            }
+                        },
+                        "Google Task ID": {
+                            "rich_text": [{"plain_text": "gtask_xyz789"}]
+                        },
+                        "List": {
+                            "select": {"name": "Next Action"}
+                        }
+                    },
+                    "url": "https://www.notion.so/Updated-Task-abc123def456"
+                }
+            }
+        }
+    }
+
+
+@pytest.fixture
+def sample_gtask_trigger():
+    """Sample Google Task trigger with Notion URL in notes (incomplete task)."""
+    return {
+        "trigger": {
+            "event": {
+                "title": "Task from Notion",
+                "notes": "Notion Task: Task from Notion\nLink: https://www.notion.so/Test-Task-abc123def456789012345678901234ab",
+                "due": "2024-01-20T00:00:00.000Z",
+                "status": "needsAction"  # Not completed
+            }
+        }
+    }
+
+
+@pytest.fixture
+def sample_gtask_trigger_completed():
+    """Sample Google Task trigger with completed status."""
+    return {
+        "trigger": {
+            "event": {
+                "title": "Completed Task from Notion",
+                "notes": "Notion Task: Completed Task\nLink: https://www.notion.so/Test-Task-abc123def456789012345678901234ab",
+                "due": "2024-01-20T00:00:00.000Z",
+                "status": "completed"
+            }
+        }
+    }

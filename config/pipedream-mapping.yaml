@@ -38,32 +38,32 @@ workflows:
         script_path: "src/steps/label_gmail_processed.py"
         description: "Labels processed emails in Gmail"
 
-  # Notion Task to Google Calendar Workflow
+  # Notion Task to Google Task Workflow
   notion_task_to_gcal:
     id: "${PIPEDREAM_WORKFLOW_NOTION_TASK_TO_GCAL}"
-    name: "Notion Task to GCal Event"
+    name: "Create Google Task from Notion"
     steps:
-      - step_name: "notion_task_to_gcal"
-        script_path: "src/steps/notion_task_to_gcal.py"
-        description: "Prepares Notion task for GCal event creation"
+      - step_name: "notion_task_to_google_tasks"
+        script_path: "src/steps/notion_task_to_google.py"
+        description: "Creates Google Task from Notion task"
 
-  # Notion Update to GCal Workflow
+  # Notion Update to Google Task Workflow
   notion_update_to_gcal:
     id: "${PIPEDREAM_WORKFLOW_NOTION_UPDATE_TO_GCAL}"
-    name: "Notion Update to GCal Update"
+    name: "Update Google Task from Notion"
     steps:
-      - step_name: "notion_update_to_gcal"
-        script_path: "src/steps/notion_update_to_gcal.py"
-        description: "Handles Notion updates for GCal sync"
+      - step_name: "notion_update_to_google_tasks"
+        script_path: "src/steps/notion_update_to_google.py"
+        description: "Updates Google Task from Notion changes"
 
-  # GCal to Notion Sync Workflow
+  # Google Task to Notion Sync Workflow
   gcal_to_notion:
     id: "${PIPEDREAM_WORKFLOW_GCAL_TO_NOTION}"
-    name: "GCal Event to Notion Sync"
+    name: "Update Notion Task from Google Task"
     steps:
-      - step_name: "gcal_event_to_notion"
-        script_path: "src/steps/gcal_event_to_notion.py"
-        description: "Syncs GCal changes back to Notion"
+      - step_name: "google_task_to_notion"
+        script_path: "src/steps/google_to_notion.py"
+        description: "Syncs Google Task changes to Notion"
 
 # Deployment settings
 settings:
