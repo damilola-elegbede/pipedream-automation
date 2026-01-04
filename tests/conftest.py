@@ -220,7 +220,7 @@ def sample_notion_update_trigger_gtask():
                             "rich_text": [{"plain_text": "gtask_xyz789"}]
                         },
                         "List": {
-                            "select": {"name": "Next Action"}
+                            "status": {"name": "Next Action"}
                         }
                     },
                     "url": "https://www.notion.so/Updated-Task-abc123def456"

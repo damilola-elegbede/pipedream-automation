@@ -50,7 +50,7 @@ class TestHandler:
                             "Task name": {"title": [{"plain_text": "Test Task"}]},
                             "Due Date": {"date": None},
                             "Google Task ID": {"rich_text": [{"plain_text": "task_123"}]},
-                            "List": {"select": {"name": "Next Action"}}
+                            "List": {"status": {"name": "Next Action"}}
                         },
                         "url": "https://www.notion.so/test"
                     }
@@ -73,7 +73,7 @@ class TestHandler:
                             "Task name": {"title": [{"plain_text": "Test Task"}]},
                             "Due Date": {"date": {"start": "2024-01-20", "end": None}},
                             "Google Task ID": {"rich_text": []},  # Empty = no task
-                            "List": {"select": {"name": "Next Action"}}
+                            "List": {"status": {"name": "Next Action"}}
                         },
                         "url": "https://www.notion.so/test"
                     }
@@ -106,7 +106,7 @@ class TestHandler:
                             "Task name": {"title": [{"plain_text": "Completed Task"}]},
                             "Due Date": {"date": {"start": "2024-01-20", "end": None}},
                             "Google Task ID": {"rich_text": [{"plain_text": "task_123"}]},
-                            "List": {"select": {"name": "Completed"}}
+                            "List": {"status": {"name": "Completed"}}
                         },
                         "url": "https://www.notion.so/test"
                     }
