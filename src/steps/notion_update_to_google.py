@@ -96,8 +96,8 @@ def handler(pd: "pipedream"):
     task_id = safe_get(google_task_id_prop, ["rich_text", 0, "plain_text"])
     logger.info(f"Extracted task_id: '{task_id}'")
 
-    # List field for completion status
-    list_value = safe_get(properties, ["List", "select", "name"])
+    # List field for completion status (Notion "status" type, not "select")
+    list_value = safe_get(properties, ["List", "status", "name"])
     is_completed = list_value == "Completed"
     logger.info(f"List value: '{list_value}', is_completed: {is_completed}")
 
