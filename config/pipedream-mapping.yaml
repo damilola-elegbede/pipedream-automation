@@ -6,6 +6,7 @@
 #   PIPEDREAM_WORKFLOW_NOTION_TASK_TO_GCAL - Workflow ID for Notion Task to GCal
 #   PIPEDREAM_WORKFLOW_NOTION_UPDATE_TO_GCAL - Workflow ID for Notion Update to GCal
 #   PIPEDREAM_WORKFLOW_GCAL_TO_NOTION      - Workflow ID for GCal to Notion
+#   PIPEDREAM_WORKFLOW_HORIZON_SCORES      - Workflow ID for Horizon Score Updater
 #
 # Usage:
 #   python -m src.deploy.deploy_to_pipedream --config config/pipedream-mapping.yaml
@@ -64,6 +65,15 @@ workflows:
       - step_name: "google_task_to_notion"
         script_path: "src/steps/google_to_notion.py"
         description: "Syncs Google Task changes to Notion"
+
+  # Horizon Score Updater Workflow
+  horizon_scores:
+    id: "${PIPEDREAM_WORKFLOW_HORIZON_SCORES}"
+    name: "Update Notion Horizon Scores"
+    steps:
+      - step_name: "update_horizon_scores"
+        script_path: "src/steps/update_horizon_scores.py"
+        description: "Scores tasks based on alignment with Horizons of Focus using Claude AI"
 
 # Deployment settings
 settings:
