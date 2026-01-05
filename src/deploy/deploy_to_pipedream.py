@@ -117,6 +117,7 @@ class PipedreamSyncer:
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self.results: list[WorkflowResult] = []
+        self.headless_mode: bool = False
 
     async def __aenter__(self) -> "PipedreamSyncer":
         """Async context manager entry - setup browser."""
@@ -134,13 +135,16 @@ class PipedreamSyncer:
             return
         print(f"{prefix.get(level, '')}{message}")
 
-    async def setup_browser_interactive(self) -> None:
+    async def setup_browser_interactive(self, force_headed: bool = False) -> None:
         """
         Initialize browser with persistent context for Google SSO.
 
         Uses a persistent browser profile that:
         - Persists login state between runs
         - Removes automation detection flags for Google SSO
+
+        Args:
+            force_headed: If True, always run in headed mode (visible browser)
         """
         if not PLAYWRIGHT_AVAILABLE:
             raise ImportError(
@@ -155,16 +159,22 @@ class PipedreamSyncer:
 
         self.playwright = await async_playwright().start()
 
-        # Check if we have cached cookies - if so, run headless
+        # Check if we have cached cookies - if so, run headless (unless forced headed)
         cached_cookies = get_cached_cookies()
-        headless_mode = bool(cached_cookies)
-        if headless_mode:
+        if force_headed:
+            self.headless_mode = False
+            self.log("Running in headed mode (forced)", "debug")
+        elif cached_cookies:
+            self.headless_mode = True
             self.log("Found cached cookies, running headless", "debug")
+        else:
+            self.headless_mode = False
+            self.log("No cached cookies, running headed for login", "debug")
 
         # Use persistent context for Google SSO compatibility
         self.context = await self.playwright.chromium.launch_persistent_context(
             user_data_dir=str(BROWSER_PROFILE_DIR),
-            headless=headless_mode,  # Headless if cookies exist, headed for login
+            headless=self.headless_mode,
             viewport={
                 "width": self.config.settings.viewport_width,
                 "height": self.config.settings.viewport_height,
@@ -183,7 +193,7 @@ class PipedreamSyncer:
         # Grant clipboard permissions to the context
         await self.context.grant_permissions(["clipboard-read", "clipboard-write"])
 
-        # Load cached cookies if available (reuse from earlier check)
+        # Load cached cookies if available
         if cached_cookies:
             await self.context.add_cookies(cached_cookies)
             self.log(f"Loaded {len(cached_cookies)} cached cookies from .env.local", "debug")
@@ -236,6 +246,7 @@ class PipedreamSyncer:
         Wait for user to complete login via Google SSO.
 
         Returns True when logged in, False on timeout.
+        If running headless and not logged in, restarts browser in headed mode.
         """
         if not self.page:
             return False
@@ -244,15 +255,30 @@ class PipedreamSyncer:
         self.log("Navigating to Pipedream...")
         await self.page.goto(self.config.pipedream_base_url, wait_until="networkidle")
 
-        # Check if already logged in
+        # Check if already logged in (give more time in headless mode for session to load)
+        check_timeout = 8000 if self.headless_mode else 3000
         try:
-            await self.page.wait_for_selector(LOGGED_IN_INDICATOR, timeout=3000)
+            await self.page.wait_for_selector(LOGGED_IN_INDICATOR, timeout=check_timeout)
             self.log("Already logged in!")
             return True
         except PlaywrightTimeout:
             pass
 
-        # Not logged in - prompt user
+        # Also check URL - if we're on dashboard/workflows, we're logged in
+        current_url = self.page.url
+        if "/workflows" in current_url or "/projects" in current_url:
+            self.log("Already logged in!")
+            return True
+
+        # Not logged in - if headless, restart in headed mode for manual login
+        if self.headless_mode:
+            self.log("Session expired, restarting browser for login...")
+            await self.teardown_browser()
+            await self.setup_browser_interactive(force_headed=True)
+            # Navigate again
+            await self.page.goto(self.config.pipedream_base_url, wait_until="networkidle")
+
+        # Prompt user for login (now in headed mode)
         print("\n" + "=" * 50)
         print("PIPEDREAM LOGIN REQUIRED")
         print("=" * 50)
