@@ -133,39 +133,63 @@ def fetch_in_progress_goals(database_id, headers):
     """
     url = f"{NOTION_API_BASE}/databases/{database_id}/query"
 
-    payload = {
+    # Try with Status filter first, fall back to no filter if it fails
+    base_payload = {
         "filter": {
             "property": "Status",
             "status": {"equals": "In Progress"}
         }
     }
+    use_filter = True
 
-    response = retry_with_backoff(
-        lambda: requests.post(url, headers=headers, json=payload, timeout=60)
-    )
+    # Test if filter works
+    try:
+        test_response = retry_with_backoff(
+            lambda: requests.post(url, headers=headers, json=base_payload, timeout=60)
+        )
+        test_response.json()  # Validate response
+    except Exception as e:
+        print(f"    Status filter failed ({e}), fetching all goals...")
+        use_filter = False
 
     goals = []
-    for page in response.json().get("results", []):
-        props = page.get("properties", {})
+    start_cursor = None
 
-        # Extract goal title
-        title_prop = props.get("Name", {})
-        title = ""
-        if title_prop.get("type") == "title":
-            title = extract_text_from_rich_text(title_prop.get("title", []))
+    while True:
+        payload = dict(base_payload) if use_filter else {}
+        if start_cursor:
+            payload["start_cursor"] = start_cursor
 
-        # Extract Focus Areas (multi-select)
-        focus_areas = []
-        focus_prop = props.get("Focus Area", {})
-        if focus_prop.get("type") == "multi_select":
-            focus_areas = [opt.get("name") for opt in focus_prop.get("multi_select", [])]
+        response = retry_with_backoff(
+            lambda p=payload: requests.post(url, headers=headers, json=p, timeout=60)
+        )
+        data = response.json()
 
-        if title:  # Only include goals with titles
-            goals.append({
-                "name": title,
-                "focus_areas": focus_areas,
-                "focus_count": len(focus_areas)
-            })
+        for page in data.get("results", []):
+            props = page.get("properties", {})
+
+            # Extract goal title
+            title_prop = props.get("Name", {})
+            title = ""
+            if title_prop.get("type") == "title":
+                title = extract_text_from_rich_text(title_prop.get("title", []))
+
+            # Extract Focus Areas (multi-select)
+            focus_areas = []
+            focus_prop = props.get("Focus Area", {})
+            if focus_prop.get("type") == "multi_select":
+                focus_areas = [opt.get("name") for opt in focus_prop.get("multi_select", [])]
+
+            if title:  # Only include goals with titles
+                goals.append({
+                    "name": title,
+                    "focus_areas": focus_areas,
+                    "focus_count": len(focus_areas)
+                })
+
+        if not data.get("has_more"):
+            break
+        start_cursor = data.get("next_cursor")
 
     # Sort by focus_count descending (goals touching more areas = higher priority)
     goals.sort(key=lambda g: g["focus_count"], reverse=True)
@@ -695,7 +719,11 @@ def update_scores_parallel(scores, headers):
         if not task_id or raw_score is None:
             return None, None, False, "Missing task_id or score", score_data
 
-        score = max(0, min(100, int(raw_score)))
+        try:
+            score = max(0, min(100, int(raw_score)))
+        except (ValueError, TypeError):
+            return task_id, None, False, f"Invalid score value: {raw_score}", score_data
+
         success = update_horizon_score(task_id, score, headers)
         return task_id, score, success, reasoning, None
 
@@ -779,9 +807,10 @@ def handler(pd: "pipedream"):
         # --- 3b. Fetch In Progress Goals from inline database ---
         print("  Looking for Goals inline database...")
         inline_dbs = find_inline_databases(blocks)
+        print(f"  Found {len(inline_dbs)} inline database(s): {inline_dbs}")
         for db in inline_dbs:
             if "Goals" in db["title"]:
-                print(f"  Found Goals database: {db['title']}")
+                print(f"  Found Goals database: {db['title']} (ID: {db['id']})")
                 goals = fetch_in_progress_goals(db["id"], notion_headers)
                 if goals:
                     horizons_content += "\n\n## In Progress Goals (ordered by cross-area impact)\n"
