@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- Configuration ---
 NOTION_API_VERSION = "2022-06-28"
-CLAUDE_MODEL = "claude-3-5-haiku-latest"
+CLAUDE_MODEL = "claude-opus-4-5-20251101"
 BATCH_SIZE = 20  # Increased from 15 to reduce number of batches
 LIST_VALUES = ["Next Actions", "Waiting For", "Someday/Maybe"]
 
@@ -78,7 +78,7 @@ def fetch_page_blocks(page_id, headers):
             params["start_cursor"] = start_cursor
 
         response = retry_with_backoff(
-            lambda u=url, p=params: requests.get(u, headers=headers, params=p, timeout=30)
+            lambda u=url, p=params: requests.get(u, headers=headers, params=p, timeout=60)
         )
         data = response.json()
         blocks = data.get("results", [])
@@ -96,6 +96,80 @@ def fetch_page_blocks(page_id, headers):
         start_cursor = data.get("next_cursor")
 
     return all_blocks
+
+
+def find_inline_databases(blocks):
+    """
+    Find child_database blocks in a list of blocks and return their IDs.
+
+    Args:
+        blocks: List of Notion block objects (from fetch_page_blocks)
+
+    Returns:
+        List of dicts with 'id' and 'title' for each inline database
+    """
+    databases = []
+    for block in blocks:
+        if block.get("type") == "child_database":
+            db_info = block.get("child_database", {})
+            databases.append({
+                "id": block.get("id"),
+                "title": db_info.get("title", "Untitled")
+            })
+    return databases
+
+
+def fetch_in_progress_goals(database_id, headers):
+    """
+    Query goals database for In Progress items with Focus Areas.
+
+    Args:
+        database_id: The Notion database ID
+        headers: Notion API headers
+
+    Returns:
+        List of goal dicts with name, focus_areas, and focus_count,
+        sorted by focus_count descending (higher leverage first)
+    """
+    url = f"{NOTION_API_BASE}/databases/{database_id}/query"
+
+    payload = {
+        "filter": {
+            "property": "Status",
+            "status": {"equals": "In Progress"}
+        }
+    }
+
+    response = retry_with_backoff(
+        lambda: requests.post(url, headers=headers, json=payload, timeout=60)
+    )
+
+    goals = []
+    for page in response.json().get("results", []):
+        props = page.get("properties", {})
+
+        # Extract goal title
+        title_prop = props.get("Name", {})
+        title = ""
+        if title_prop.get("type") == "title":
+            title = extract_text_from_rich_text(title_prop.get("title", []))
+
+        # Extract Focus Areas (multi-select)
+        focus_areas = []
+        focus_prop = props.get("Focus Area", {})
+        if focus_prop.get("type") == "multi_select":
+            focus_areas = [opt.get("name") for opt in focus_prop.get("multi_select", [])]
+
+        if title:  # Only include goals with titles
+            goals.append({
+                "name": title,
+                "focus_areas": focus_areas,
+                "focus_count": len(focus_areas)
+            })
+
+    # Sort by focus_count descending (goals touching more areas = higher priority)
+    goals.sort(key=lambda g: g["focus_count"], reverse=True)
+    return goals
 
 
 def extract_text_from_rich_text(rich_text_array):
@@ -242,7 +316,7 @@ def save_rubric_to_notion(rubric_text, page_id, headers):
             url = f"{NOTION_API_BASE}/blocks/{block_id}"
             try:
                 retry_with_backoff(
-                    lambda url=url: requests.delete(url, headers=headers, timeout=30)
+                    lambda url=url: requests.delete(url, headers=headers, timeout=60)
                 )
             except Exception as e:
                 print(f"    Warning: Failed to delete block {block_id}: {e}")
@@ -257,7 +331,7 @@ def save_rubric_to_notion(rubric_text, page_id, headers):
     for i in range(0, len(new_blocks), 100):
         batch = new_blocks[i:i + 100]
         retry_with_backoff(
-            lambda batch=batch: requests.patch(url, headers=headers, json={"children": batch}, timeout=30)
+            lambda batch=batch: requests.patch(url, headers=headers, json={"children": batch}, timeout=60)
         )
         time.sleep(0.3)  # Rate limit between batches
 
@@ -299,31 +373,49 @@ def generate_rubric(horizons_content, anthropic_key):
     """
     Generate a scoring rubric based on the Horizons of Focus content.
 
+    Uses GTD (Getting Things Done) framework for prioritization.
     Returns the rubric as a string.
     """
-    prompt = f"""Based on the following "Horizons of Focus" document, create a comprehensive scoring rubric for evaluating tasks.
+    prompt = f"""You are helping implement a David Allen GTD (Getting Things Done) prioritization system.
 
-The rubric should help score tasks from 0-100 based on how well they align with this person's:
-- Purpose and Core Values (What matters most to them)
-- Vision (Where they want to be)
-- Goals (What they're working toward)
-- Areas of Focus (Key life/work domains)
+## Context
+In GTD, "Horizons of Focus" represent different altitudes of perspective:
+- Horizon 5: Purpose/Principles - Life purpose and core values
+- Horizon 4: Vision - Long-term vision of ideal life/work
+- Horizon 3: Goals - 1-2 year objectives
+- Horizon 2: Areas of Focus - Key areas of responsibility (roles, accountabilities)
+- Horizon 1: Projects - Multi-step outcomes
+- Ground: Next Actions - Individual tasks
 
-Create a rubric that considers:
-1. Direct alignment with stated goals (high score)
-2. Support of areas of focus (medium-high score)
-3. Alignment with values and purpose (medium score)
-4. Neutral or maintenance tasks (low-medium score)
-5. Misalignment or distraction from priorities (low score)
+## Your Task
+Create a scoring rubric (0-100) that evaluates how well a task aligns with the person's stated identity and priorities from their Horizons of Focus document below.
 
-Return the rubric in a clear, structured format that can be used to evaluate individual tasks.
+The "Horizon Score" serves as a **priority indicator** - helping the user decide which flexible tasks (no due date) to tackle next based on who they have said they want to be.
+
+## Document Structure
+The Horizons document includes:
+- Purpose and Core Values
+- Vision
+- Areas of Focus: Spirituality, Personal Development, Health, Romance, Family, Business & Career, Finances, Fun & Recreation, Social, Humanitarian
+- In Progress Goals (each tagged with relevant Focus Areas)
+
+## Scoring Guidelines
+Goals spanning MULTIPLE Focus Areas indicate higher strategic leverage.
+
+Score ranges:
+- 90-100: Directly advances a high-leverage goal (3+ Focus Areas) - "This IS who I want to be"
+- 75-89: Directly advances a focused goal (1-2 Focus Areas) - "This supports my goals"
+- 50-74: Supports an Area of Focus with active goals - "This maintains important areas"
+- 30-49: Aligns with values but no direct goal connection - "This feels right but isn't urgent"
+- 10-29: Maintenance/neutral - "Necessary but not identity-aligned"
+- 0-9: Misaligned or distraction - "This pulls me away from who I want to be"
 
 ---
 HORIZONS OF FOCUS:
 {horizons_content}
 ---
 
-Provide the rubric now:"""
+Create a specific rubric based on THIS person's stated horizons that can evaluate their tasks. Be concrete - reference their actual goals, values, and areas."""
 
     print("Generating scoring rubric from Horizons of Focus...")
     rubric = call_claude(prompt, anthropic_key)
@@ -341,13 +433,19 @@ def query_tasks(database_id, headers):
     url = f"{NOTION_API_BASE}/databases/{database_id}/query"
     start_cursor = None
 
-    # Build filter for List property
+    # Build filter for List property AND empty Due date
+    # Only score tasks without due dates (flexible tasks needing prioritization)
     filter_conditions = [
         {"property": "List", "status": {"equals": value}}
         for value in LIST_VALUES
     ]
     filter_payload = {
-        "filter": {"or": filter_conditions},
+        "filter": {
+            "and": [
+                {"or": filter_conditions},
+                {"property": "Due", "date": {"is_empty": True}}
+            ]
+        },
         "page_size": 100
     }
 
@@ -356,7 +454,7 @@ def query_tasks(database_id, headers):
             filter_payload["start_cursor"] = start_cursor
 
         response = retry_with_backoff(
-            lambda: requests.post(url, headers=headers, json=filter_payload, timeout=30)
+            lambda: requests.post(url, headers=headers, json=filter_payload, timeout=60)
         )
         data = response.json()
         tasks = data.get("results", [])
@@ -528,7 +626,7 @@ def update_horizon_score(task_id, score, headers):
 
     try:
         retry_with_backoff(
-            lambda: requests.patch(url, headers=headers, json=payload, timeout=30)
+            lambda: requests.patch(url, headers=headers, json=payload, timeout=60)
         )
         return True
     except Exception as e:
@@ -677,6 +775,25 @@ def handler(pd: "pipedream"):
 
         if not horizons_content.strip():
             raise Exception("Horizons of Focus page is empty or has no readable content")
+
+        # --- 3b. Fetch In Progress Goals from inline database ---
+        print("  Looking for Goals inline database...")
+        inline_dbs = find_inline_databases(blocks)
+        for db in inline_dbs:
+            if "Goals" in db["title"]:
+                print(f"  Found Goals database: {db['title']}")
+                goals = fetch_in_progress_goals(db["id"], notion_headers)
+                if goals:
+                    horizons_content += "\n\n## In Progress Goals (ordered by cross-area impact)\n"
+                    for goal in goals:
+                        areas_str = ", ".join(goal["focus_areas"]) if goal["focus_areas"] else "No specific area"
+                        horizons_content += f"• {goal['name']} [Focus Areas: {areas_str}]\n"
+                    print(f"  Added {len(goals)} in-progress goals to horizons content")
+                else:
+                    print("  No in-progress goals found")
+                break
+        else:
+            print("  No Goals database found on page")
 
         # --- 4. Generate scoring rubric ---
         print("\nStep 2: Generating scoring rubric with Claude...")
