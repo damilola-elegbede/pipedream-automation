@@ -155,10 +155,16 @@ class PipedreamSyncer:
 
         self.playwright = await async_playwright().start()
 
+        # Check if we have cached cookies - if so, run headless
+        cached_cookies = get_cached_cookies()
+        headless_mode = bool(cached_cookies)
+        if headless_mode:
+            self.log("Found cached cookies, running headless", "debug")
+
         # Use persistent context for Google SSO compatibility
         self.context = await self.playwright.chromium.launch_persistent_context(
             user_data_dir=str(BROWSER_PROFILE_DIR),
-            headless=False,  # Always headed for interactive login
+            headless=headless_mode,  # Headless if cookies exist, headed for login
             viewport={
                 "width": self.config.settings.viewport_width,
                 "height": self.config.settings.viewport_height,
@@ -176,6 +182,12 @@ class PipedreamSyncer:
 
         # Grant clipboard permissions to the context
         await self.context.grant_permissions(["clipboard-read", "clipboard-write"])
+
+        # Load cached cookies if available (reuse from earlier check)
+        if cached_cookies:
+            await self.context.add_cookies(cached_cookies)
+            self.log(f"Loaded {len(cached_cookies)} cached cookies from .env.local", "debug")
+
         self.log("Browser ready", "debug")
 
     async def teardown_browser(self) -> None:
