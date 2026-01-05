@@ -1,5 +1,5 @@
 # Runtime dependencies (used by Pipedream steps)
-requests>=2.32.0
+requests>=2.32.4  # CVE-2024-47081 fix
 
 # Testing dependencies
 pytest>=7.4.0
