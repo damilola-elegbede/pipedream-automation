@@ -203,6 +203,37 @@ def extract_text_from_rich_text(rich_text_array):
     return "".join(item.get("plain_text", "") for item in rich_text_array)
 
 
+def fetch_core_values(database_id, headers):
+    """
+    Query Core Values database and extract values.
+
+    Args:
+        database_id: The Notion database ID for Core Values
+        headers: Notion API headers
+
+    Returns:
+        List of core value names
+    """
+    url = f"{NOTION_API_BASE}/databases/{database_id}/query"
+
+    response = retry_with_backoff(
+        lambda: requests.post(url, headers=headers, json={}, timeout=60)
+    )
+
+    values = []
+    for page in response.json().get("results", []):
+        props = page.get("properties", {})
+        # Extract value name (title property)
+        name_prop = props.get("Name", {})
+        name = ""
+        if name_prop.get("type") == "title":
+            name = extract_text_from_rich_text(name_prop.get("title", []))
+        if name:
+            values.append(name)
+
+    return values
+
+
 def parse_blocks_to_text(blocks):
     """
     Convert Notion blocks to readable text format.
@@ -449,7 +480,7 @@ Create a specific rubric based on THIS person's stated horizons that can evaluat
 
 def query_tasks(database_id, headers):
     """
-    Query all tasks with List property in target values.
+    Query all tasks with List property in target values and no due date.
 
     Returns a list of task objects with their properties.
     """
@@ -457,38 +488,69 @@ def query_tasks(database_id, headers):
     url = f"{NOTION_API_BASE}/databases/{database_id}/query"
     start_cursor = None
 
-    # Build filter for List property AND empty Due date
+    # Build explicit filter structure for List property AND empty Due date
     # Only score tasks without due dates (flexible tasks needing prioritization)
-    filter_conditions = [
-        {"property": "List", "status": {"equals": value}}
-        for value in LIST_VALUES
+    or_conditions = [
+        {"property": "List", "status": {"equals": "Next Actions"}},
+        {"property": "List", "status": {"equals": "Waiting For"}},
+        {"property": "List", "status": {"equals": "Someday/Maybe"}}
     ]
+
     filter_payload = {
         "filter": {
             "and": [
-                {"or": filter_conditions},
+                {"or": or_conditions},
                 {"property": "Due", "date": {"is_empty": True}}
             ]
         },
         "page_size": 100
     }
 
+    # Debug: print the filter being sent
+    print(f"  Filter: {json.dumps(filter_payload['filter'])}")
+
+    use_fallback = False
+
     while True:
         if start_cursor:
             filter_payload["start_cursor"] = start_cursor
 
-        response = retry_with_backoff(
-            lambda: requests.post(url, headers=headers, json=filter_payload, timeout=60)
-        )
-        data = response.json()
-        tasks = data.get("results", [])
-        all_tasks.extend(tasks)
+        try:
+            response = retry_with_backoff(
+                lambda fp=filter_payload: requests.post(url, headers=headers, json=fp, timeout=60)
+            )
+            data = response.json()
+        except Exception as e:
+            if not use_fallback:
+                print(f"  Compound filter failed ({e}), trying simpler filter...")
+                # Fallback: just filter by List, then filter Due in Python
+                filter_payload = {
+                    "filter": {"or": or_conditions},
+                    "page_size": 100
+                }
+                use_fallback = True
+                continue
+            else:
+                raise
 
-        print(f"  Fetched {len(tasks)} tasks (total: {len(all_tasks)})")
+        tasks = data.get("results", [])
+
+        # If using fallback, filter out tasks with due dates in Python
+        if use_fallback:
+            original_count = len(tasks)
+            tasks = [t for t in tasks
+                     if not t.get("properties", {}).get("Due", {}).get("date")]
+            print(f"  Fetched {original_count} tasks, {len(tasks)} without due dates (total: {len(all_tasks) + len(tasks)})")
+        else:
+            print(f"  Fetched {len(tasks)} tasks (total: {len(all_tasks) + len(tasks)})")
+
+        all_tasks.extend(tasks)
 
         if not data.get("has_more"):
             break
         start_cursor = data.get("next_cursor")
+        if start_cursor:
+            filter_payload["start_cursor"] = start_cursor
         # Small delay between pagination requests
         time.sleep(0.3)
 
@@ -784,6 +846,10 @@ def handler(pd: "pipedream"):
     # Optional: page to save the rubric for review
     rubric_page_id = os.environ.get("NOTION_RUBRIC_PAGE_ID")
 
+    # Optional: inline database IDs for Goals and Core Values
+    goals_db_id = os.environ.get("NOTION_GOALS_DB_ID")
+    core_values_db_id = os.environ.get("NOTION_CORE_VALUES_DB_ID")
+
     # --- 2. Set up headers ---
     notion_headers = {
         "Authorization": f"Bearer {notion_token}",
@@ -804,25 +870,40 @@ def handler(pd: "pipedream"):
         if not horizons_content.strip():
             raise Exception("Horizons of Focus page is empty or has no readable content")
 
-        # --- 3b. Fetch In Progress Goals from inline database ---
-        print("  Looking for Goals inline database...")
-        inline_dbs = find_inline_databases(blocks)
-        print(f"  Found {len(inline_dbs)} inline database(s): {inline_dbs}")
-        for db in inline_dbs:
-            if "Goals" in db["title"]:
-                print(f"  Found Goals database: {db['title']} (ID: {db['id']})")
-                goals = fetch_in_progress_goals(db["id"], notion_headers)
+        # --- 3b. Fetch Core Values from inline database (if configured) ---
+        if core_values_db_id:
+            print("  Fetching Core Values database...")
+            try:
+                core_values = fetch_core_values(core_values_db_id, notion_headers)
+                if core_values:
+                    horizons_content += "\n\n## Core Values\n"
+                    for value in core_values:
+                        horizons_content += f"• {value}\n"
+                    print(f"  Added {len(core_values)} core values")
+                else:
+                    print("  No core values found")
+            except Exception as e:
+                print(f"  Warning: Could not fetch Core Values: {e}")
+        else:
+            print("  NOTION_CORE_VALUES_DB_ID not set, skipping Core Values")
+
+        # --- 3c. Fetch In Progress Goals from inline database (if configured) ---
+        if goals_db_id:
+            print("  Fetching Goals database...")
+            try:
+                goals = fetch_in_progress_goals(goals_db_id, notion_headers)
                 if goals:
                     horizons_content += "\n\n## In Progress Goals (ordered by cross-area impact)\n"
                     for goal in goals:
                         areas_str = ", ".join(goal["focus_areas"]) if goal["focus_areas"] else "No specific area"
                         horizons_content += f"• {goal['name']} [Focus Areas: {areas_str}]\n"
-                    print(f"  Added {len(goals)} in-progress goals to horizons content")
+                    print(f"  Added {len(goals)} in-progress goals")
                 else:
                     print("  No in-progress goals found")
-                break
+            except Exception as e:
+                print(f"  Warning: Could not fetch Goals: {e}")
         else:
-            print("  No Goals database found on page")
+            print("  NOTION_GOALS_DB_ID not set, skipping Goals")
 
         # --- 4. Generate scoring rubric ---
         print("\nStep 2: Generating scoring rubric with Claude...")
