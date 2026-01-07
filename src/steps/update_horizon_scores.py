@@ -32,13 +32,14 @@ class HorizonScoringError(Exception):
 # --- Configuration ---
 NOTION_API_VERSION = "2022-06-28"
 CLAUDE_MODEL = "claude-opus-4-5-20251101"
-BATCH_SIZE = 25  # Increased to reduce number of batches (was 20)
+BATCH_SIZE = 40  # Increased for fewer batches (was 25)
 LIST_VALUES = ["Next Actions", "Waiting For", "Someday/Maybe"]
 
 # Parallelization settings - tuned for speed within rate limits
-SCORING_WORKERS = 6   # Parallel Claude API calls (was 4)
-UPDATE_WORKERS = 8    # Parallel Notion updates (was 5)
+SCORING_WORKERS = 10  # Parallel Claude API calls (was 6)
+UPDATE_WORKERS = 10   # Parallel Notion updates (was 8)
 FETCH_WORKERS = 3     # Parallel initial data fetches
+BLOCK_DELETE_WORKERS = 5  # Parallel block deletions
 
 # --- API Endpoints ---
 NOTION_API_BASE = "https://api.notion.com/v1"
@@ -74,14 +75,20 @@ def retry_with_backoff(request_func, max_retries=5):
     raise Exception(f"Max retries ({max_retries}) exceeded")
 
 
-def fetch_page_blocks(page_id, headers):
+def fetch_page_blocks(page_id, headers, session=None):
     """
     Recursively fetch all blocks from a Notion page.
 
+    Args:
+        page_id: Notion page ID
+        headers: API headers
+        session: Optional requests.Session for connection pooling
+
     Returns a list of block objects with their content.
     """
+    http = session or requests
     all_blocks = []
-    url = f"{NOTION_API_BASE}/blocks/{page_id}/children"
+    base_url = f"{NOTION_API_BASE}/blocks/{page_id}/children"
     start_cursor = None
 
     while True:
@@ -90,7 +97,7 @@ def fetch_page_blocks(page_id, headers):
             params["start_cursor"] = start_cursor
 
         response = retry_with_backoff(
-            lambda u=url, p=params: requests.get(u, headers=headers, params=p, timeout=60)
+            lambda u=base_url, p=params: http.get(u, headers=headers, params=p, timeout=60)
         )
         data = response.json()
         blocks = data.get("results", [])
@@ -100,7 +107,7 @@ def fetch_page_blocks(page_id, headers):
         for block in blocks:
             if block.get("has_children"):
                 block_id = block.get("id")
-                child_blocks = fetch_page_blocks(block_id, headers)
+                child_blocks = fetch_page_blocks(block_id, headers, session)
                 all_blocks.extend(child_blocks)
 
         if not data.get("has_more"):
@@ -131,21 +138,23 @@ def find_inline_databases(blocks):
     return databases
 
 
-def fetch_in_progress_goals(database_id, headers):
+def fetch_in_progress_goals(database_id, headers, session=None):
     """
     Query goals database for In Progress items with Focus Areas and descriptions.
 
     Args:
         database_id: The Notion database ID
         headers: Notion API headers
+        session: Optional requests.Session for connection pooling
 
     Returns:
         List of goal dicts with name, description, focus_areas, and focus_count,
         sorted by focus_count descending (higher leverage first)
     """
+    http = session or requests
     url = f"{NOTION_API_BASE}/databases/{database_id}/query"
 
-    # Try with Status filter first, fall back to no filter if it fails
+    # Start with Status filter, fallback inline if it fails (no redundant test call)
     base_payload = {
         "filter": {
             "property": "Status",
@@ -153,16 +162,6 @@ def fetch_in_progress_goals(database_id, headers):
         }
     }
     use_filter = True
-
-    # Test if filter works
-    try:
-        test_response = retry_with_backoff(
-            lambda: requests.post(url, headers=headers, json=base_payload, timeout=60)
-        )
-        test_response.json()  # Validate response
-    except Exception as e:
-        print(f"    Status filter failed ({e}), fetching all goals...")
-        use_filter = False
 
     goals = []
     start_cursor = None
@@ -172,10 +171,25 @@ def fetch_in_progress_goals(database_id, headers):
         if start_cursor:
             payload["start_cursor"] = start_cursor
 
-        response = retry_with_backoff(
-            lambda p=payload: requests.post(url, headers=headers, json=p, timeout=60)
-        )
-        data = response.json()
+        try:
+            response = retry_with_backoff(
+                lambda p=payload: http.post(url, headers=headers, json=p, timeout=60)
+            )
+            data = response.json()
+        except Exception as e:
+            # Filter failed - retry with no filter (inline fallback, no redundant test)
+            if use_filter:
+                print(f"    Status filter failed ({e}), fetching all goals...")
+                use_filter = False
+                payload = {}
+                if start_cursor:
+                    payload["start_cursor"] = start_cursor
+                response = retry_with_backoff(
+                    lambda p=payload: http.post(url, headers=headers, json=p, timeout=60)
+                )
+                data = response.json()
+            else:
+                raise
 
         for page in data.get("results", []):
             props = page.get("properties", {})
@@ -225,21 +239,23 @@ def extract_text_from_rich_text(rich_text_array):
     return "".join(item.get("plain_text", "") for item in rich_text_array)
 
 
-def fetch_core_values(database_id, headers):
+def fetch_core_values(database_id, headers, session=None):
     """
     Query Core Values database and extract values.
 
     Args:
         database_id: The Notion database ID for Core Values
         headers: Notion API headers
+        session: Optional requests.Session for connection pooling
 
     Returns:
         List of core value names
     """
+    http = session or requests
     url = f"{NOTION_API_BASE}/databases/{database_id}/query"
 
     response = retry_with_backoff(
-        lambda: requests.post(url, headers=headers, json={}, timeout=60)
+        lambda: http.post(url, headers=headers, json={}, timeout=60)
     )
 
     values = []
@@ -370,7 +386,7 @@ def markdown_to_notion_blocks(markdown_text):
     return blocks
 
 
-def save_rubric_to_notion(rubric_text, page_id, headers):
+def save_rubric_to_notion(rubric_text, page_id, headers, session=None):
     """
     Clear existing blocks and save new rubric to a Notion page.
 
@@ -378,26 +394,34 @@ def save_rubric_to_notion(rubric_text, page_id, headers):
         rubric_text: The rubric markdown text
         page_id: The Notion page ID to update
         headers: Notion API headers
+        session: Optional requests.Session for connection pooling
 
     Returns:
         True if successful
     """
+    http = session or requests
+
     # 1. Fetch existing blocks to delete
-    existing_blocks = fetch_page_blocks(page_id, headers)
+    existing_blocks = fetch_page_blocks(page_id, headers, session)
     print(f"    Clearing {len(existing_blocks)} existing blocks...")
 
-    # 2. Delete existing blocks
-    for block in existing_blocks:
-        block_id = block.get("id")
-        if block_id:
-            url = f"{NOTION_API_BASE}/blocks/{block_id}"
-            try:
-                retry_with_backoff(
-                    lambda url=url: requests.delete(url, headers=headers, timeout=60)
-                )
-            except Exception as e:
-                print(f"    Warning: Failed to delete block {block_id}: {e}")
-            time.sleep(0.1)  # Rate limit
+    # 2. Delete existing blocks IN PARALLEL for speed
+    def delete_block(block_id):
+        """Delete a single block."""
+        url = f"{NOTION_API_BASE}/blocks/{block_id}"
+        try:
+            retry_with_backoff(
+                lambda url=url: http.delete(url, headers=headers, timeout=60)
+            )
+            return True
+        except Exception as e:
+            print(f"    Warning: Failed to delete block {block_id}: {e}")
+            return False
+
+    block_ids = [b.get("id") for b in existing_blocks if b.get("id")]
+    if block_ids:
+        with ThreadPoolExecutor(max_workers=BLOCK_DELETE_WORKERS) as executor:
+            list(executor.map(delete_block, block_ids))
 
     # 3. Convert rubric to Notion blocks
     new_blocks = markdown_to_notion_blocks(rubric_text)
@@ -408,19 +432,26 @@ def save_rubric_to_notion(rubric_text, page_id, headers):
     for i in range(0, len(new_blocks), 100):
         batch = new_blocks[i:i + 100]
         retry_with_backoff(
-            lambda batch=batch: requests.patch(url, headers=headers, json={"children": batch}, timeout=60)
+            lambda batch=batch: http.patch(url, headers=headers, json={"children": batch}, timeout=60)
         )
-        time.sleep(0.3)  # Rate limit between batches
+        time.sleep(0.1)  # Reduced from 0.3s - retry_with_backoff handles rate limits
 
     return True
 
 
-def call_claude(prompt, anthropic_key, max_tokens=4096):
+def call_claude(prompt, anthropic_key, max_tokens=4096, session=None):
     """
     Call Claude API with the given prompt.
 
+    Args:
+        prompt: The prompt to send to Claude
+        anthropic_key: Anthropic API key
+        max_tokens: Maximum tokens in response
+        session: Optional requests.Session for connection pooling
+
     Returns the response text or raises an exception.
     """
+    http = session or requests
     headers = {
         "x-api-key": anthropic_key,
         "anthropic-version": "2023-06-01",
@@ -436,7 +467,7 @@ def call_claude(prompt, anthropic_key, max_tokens=4096):
     }
 
     response = retry_with_backoff(
-        lambda: requests.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=60)
+        lambda: http.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=60)
     )
 
     data = response.json()
@@ -446,7 +477,7 @@ def call_claude(prompt, anthropic_key, max_tokens=4096):
     raise Exception(f"Unexpected Claude response format: {data}")
 
 
-def generate_rubric(horizons_content, anthropic_key):
+def generate_rubric(horizons_content, anthropic_key, session=None):
     """
     Generate a scoring rubric based on the Horizons of Focus content.
 
@@ -495,17 +526,23 @@ HORIZONS OF FOCUS:
 Create a specific rubric based on THIS person's stated horizons that can evaluate their tasks. Be concrete - reference their actual goals, values, and areas."""
 
     print("Generating scoring rubric from Horizons of Focus...")
-    rubric = call_claude(prompt, anthropic_key)
+    rubric = call_claude(prompt, anthropic_key, session=session)
     print(f"Rubric generated ({len(rubric)} characters)")
     return rubric
 
 
-def query_tasks(database_id, headers):
+def query_tasks(database_id, headers, session=None):
     """
     Query all tasks with List property in target values and no due date.
 
+    Args:
+        database_id: Notion database ID
+        headers: API headers
+        session: Optional requests.Session for connection pooling
+
     Returns a list of task objects with their properties.
     """
+    http = session or requests
     all_tasks = []
     url = f"{NOTION_API_BASE}/databases/{database_id}/query"
     start_cursor = None
@@ -539,7 +576,7 @@ def query_tasks(database_id, headers):
 
         try:
             response = retry_with_backoff(
-                lambda fp=filter_payload: requests.post(url, headers=headers, json=fp, timeout=60)
+                lambda fp=filter_payload: http.post(url, headers=headers, json=fp, timeout=60)
             )
             data = response.json()
         except Exception as e:
@@ -573,8 +610,8 @@ def query_tasks(database_id, headers):
         start_cursor = data.get("next_cursor")
         if start_cursor:
             filter_payload["start_cursor"] = start_cursor
-        # Small delay between pagination requests
-        time.sleep(0.3)
+        # Small delay between pagination requests - reduced from 0.3s
+        time.sleep(0.1)
 
     return all_tasks
 
@@ -655,9 +692,15 @@ def extract_task_info(task):
     return task_info
 
 
-def score_tasks_batch(tasks, rubric, anthropic_key):
+def score_tasks_batch(tasks, rubric, anthropic_key, session=None):
     """
     Score a batch of tasks using Claude.
+
+    Args:
+        tasks: List of task info dicts
+        rubric: Scoring rubric string
+        anthropic_key: Anthropic API key
+        session: Optional requests.Session for connection pooling
 
     Returns a list of {task_id, score, reasoning} dicts.
     """
@@ -699,7 +742,7 @@ Return your response as a JSON array with this exact format:
 
 IMPORTANT: Return ONLY the JSON array, no other text."""
 
-    response_text = call_claude(prompt, anthropic_key)
+    response_text = call_claude(prompt, anthropic_key, session=session)
 
     # Parse JSON response - FAIL LOUDLY on parse errors
     try:
@@ -721,12 +764,19 @@ IMPORTANT: Return ONLY the JSON array, no other text."""
         )
 
 
-def update_horizon_score(task_id, score, headers):
+def update_horizon_score(task_id, score, headers, session=None):
     """
     Update a task's Horizon Score property in Notion.
 
+    Args:
+        task_id: Notion page ID
+        score: Score value (0-100)
+        headers: API headers
+        session: Optional requests.Session for connection pooling
+
     Returns True on success, False on failure.
     """
+    http = session or requests
     url = f"{NOTION_API_BASE}/pages/{task_id}"
     payload = {
         "properties": {
@@ -736,7 +786,7 @@ def update_horizon_score(task_id, score, headers):
 
     try:
         retry_with_backoff(
-            lambda: requests.patch(url, headers=headers, json=payload, timeout=60)
+            lambda: http.patch(url, headers=headers, json=payload, timeout=60)
         )
         return True
     except Exception as e:
@@ -744,7 +794,7 @@ def update_horizon_score(task_id, score, headers):
         return False
 
 
-def score_all_batches_parallel(task_batches, rubric, anthropic_key):
+def score_all_batches_parallel(task_batches, rubric, anthropic_key, session=None):
     """
     Score multiple batches of tasks in parallel using ThreadPoolExecutor.
 
@@ -752,6 +802,7 @@ def score_all_batches_parallel(task_batches, rubric, anthropic_key):
         task_batches: List of task info lists (each batch is a list of task dicts)
         rubric: The scoring rubric string
         anthropic_key: Anthropic API key
+        session: Optional requests.Session for connection pooling
 
     Returns:
         List of score dicts with task_id, score, and reasoning
@@ -768,7 +819,7 @@ def score_all_batches_parallel(task_batches, rubric, anthropic_key):
     with ThreadPoolExecutor(max_workers=SCORING_WORKERS) as executor:
         # Submit all batches for parallel execution
         future_to_batch = {
-            executor.submit(score_tasks_batch, batch, rubric, anthropic_key): i
+            executor.submit(score_tasks_batch, batch, rubric, anthropic_key, session): i
             for i, batch in enumerate(task_batches)
         }
 
@@ -794,13 +845,14 @@ def score_all_batches_parallel(task_batches, rubric, anthropic_key):
     return all_scores
 
 
-def update_scores_parallel(scores, headers):
+def update_scores_parallel(scores, headers, session=None):
     """
     Update Notion pages with scores in parallel using ThreadPoolExecutor.
 
     Args:
         scores: List of score dicts with task_id, score, reasoning
         headers: Notion API headers
+        session: Optional requests.Session for connection pooling
 
     Returns:
         Tuple of (successful_updates, errors)
@@ -823,7 +875,7 @@ def update_scores_parallel(scores, headers):
         except (ValueError, TypeError):
             return task_id, None, False, f"Invalid score value: {raw_score}", score_data
 
-        success = update_horizon_score(task_id, score, headers)
+        success = update_horizon_score(task_id, score, headers, session)
         return task_id, score, success, reasoning, None
 
     print(f"  Updating {total} tasks with {UPDATE_WORKERS} parallel workers...")
@@ -896,12 +948,17 @@ def handler(pd: "pipedream"):
     goals_db_id = os.environ.get("NOTION_GOALS_DB_ID")
     core_values_db_id = os.environ.get("NOTION_CORE_VALUES_DB_ID")
 
-    # --- 2. Set up headers ---
+    # --- 2. Set up headers and sessions for connection pooling ---
     notion_headers = {
         "Authorization": f"Bearer {notion_token}",
         "Content-Type": "application/json",
         "Notion-Version": NOTION_API_VERSION,
     }
+
+    # Create sessions for connection pooling (reuses TCP connections)
+    notion_session = requests.Session()
+    notion_session.headers.update(notion_headers)
+    anthropic_session = requests.Session()
 
     successful_updates = []
     errors = []
@@ -910,9 +967,9 @@ def handler(pd: "pipedream"):
         # --- 3. Fetch all data in PARALLEL for speed ---
         print("Step 1: Fetching Horizons, Core Values, and Goals in parallel...")
 
-        # Helper functions for parallel execution
+        # Helper functions for parallel execution (use sessions)
         def fetch_horizons():
-            blocks = fetch_page_blocks(horizons_page_id, notion_headers)
+            blocks = fetch_page_blocks(horizons_page_id, notion_headers, notion_session)
             content = parse_blocks_to_text(blocks)
             return blocks, content
 
@@ -920,7 +977,7 @@ def handler(pd: "pipedream"):
             if not core_values_db_id:
                 return None
             try:
-                return fetch_core_values(core_values_db_id, notion_headers)
+                return fetch_core_values(core_values_db_id, notion_headers, notion_session)
             except Exception as e:
                 print(f"  Warning: Could not fetch Core Values: {e}")
                 return None
@@ -929,7 +986,7 @@ def handler(pd: "pipedream"):
             if not goals_db_id:
                 return None
             try:
-                return fetch_in_progress_goals(goals_db_id, notion_headers)
+                return fetch_in_progress_goals(goals_db_id, notion_headers, notion_session)
             except Exception as e:
                 print(f"  Warning: Could not fetch Goals: {e}")
                 return None
@@ -980,20 +1037,20 @@ def handler(pd: "pipedream"):
 
         # --- 4. Generate scoring rubric ---
         print("\nStep 2: Generating scoring rubric with Claude...")
-        rubric = generate_rubric(horizons_content, anthropic_key)
+        rubric = generate_rubric(horizons_content, anthropic_key, anthropic_session)
 
         # --- 4b. Save rubric to Notion page (if configured) ---
         if rubric_page_id:
             print("  Saving rubric to Notion page...")
             try:
-                save_rubric_to_notion(rubric, rubric_page_id, notion_headers)
+                save_rubric_to_notion(rubric, rubric_page_id, notion_headers, notion_session)
                 print(f"  Rubric saved: https://notion.so/{rubric_page_id.replace('-', '')}")
             except Exception as e:
                 print(f"  Warning: Failed to save rubric to Notion: {e}")
 
         # --- 5. Query tasks ---
         print(f"\nStep 3: Querying tasks with List in {LIST_VALUES}...")
-        tasks = query_tasks(database_id, notion_headers)
+        tasks = query_tasks(database_id, notion_headers, notion_session)
         print(f"  Found {len(tasks)} tasks to score")
 
         if not tasks:
@@ -1015,12 +1072,12 @@ def handler(pd: "pipedream"):
             task_infos[i:i + BATCH_SIZE]
             for i in range(0, len(task_infos), BATCH_SIZE)
         ]
-        all_scores = score_all_batches_parallel(task_batches, rubric, anthropic_key)
+        all_scores = score_all_batches_parallel(task_batches, rubric, anthropic_key, anthropic_session)
         print(f"  Received {len(all_scores)} scores from Claude")
 
         # --- 8. Update Notion with scores in parallel ---
         print("\nStep 6: Updating Horizon Scores in Notion (parallel)...")
-        successful_updates, errors = update_scores_parallel(all_scores, notion_headers)
+        successful_updates, errors = update_scores_parallel(all_scores, notion_headers, notion_session)
 
     except HorizonScoringError:
         # FAIL LOUDLY - re-raise scoring errors to fail the Pipedream job
