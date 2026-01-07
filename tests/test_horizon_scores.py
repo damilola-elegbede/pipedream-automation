@@ -19,6 +19,10 @@ from steps.update_horizon_scores import (
     fetch_page_blocks,
     call_claude,
     score_tasks_batch,
+    markdown_to_notion_blocks,
+    get_score_color,
+    create_table_block,
+    create_callout_block,
 )
 
 
@@ -387,3 +391,196 @@ class TestIntegration:
             assert result["status"] == "Completed"
             assert result["tasks_scored"] == 0
             assert "No tasks found" in result.get("message", "")
+
+
+class TestGetScoreColor:
+    """Tests for the get_score_color function."""
+
+    def test_high_leverage_green(self):
+        assert get_score_color("90-100") == "green"
+        assert get_score_color("Score: 90+") == "green"
+
+    def test_goal_aligned_blue(self):
+        assert get_score_color("75-89") == "blue"
+
+    def test_area_support_default(self):
+        assert get_score_color("50-74") == "default"
+
+    def test_values_aligned_orange(self):
+        assert get_score_color("30-49") == "orange"
+
+    def test_maintenance_gray(self):
+        assert get_score_color("10-29") == "gray"
+
+    def test_misaligned_red(self):
+        assert get_score_color("0-9") == "red"
+
+    def test_no_score_default(self):
+        assert get_score_color("Some random text") == "default"
+
+
+class TestCreateTableBlock:
+    """Tests for the create_table_block function."""
+
+    def test_creates_table_with_header(self):
+        lines = [
+            "Header1 | Header2 | Header3",
+            "Value1 | Value2 | Value3"
+        ]
+        result = create_table_block(lines)
+
+        assert result["type"] == "table"
+        assert result["table"]["table_width"] == 3
+        assert result["table"]["has_column_header"] is True
+        assert len(result["table"]["children"]) == 2
+
+    def test_header_row_is_bold(self):
+        lines = ["Header | Value"]
+        result = create_table_block(lines)
+
+        header_row = result["table"]["children"][0]
+        first_cell = header_row["table_row"]["cells"][0][0]
+        assert first_cell["annotations"]["bold"] is True
+
+    def test_applies_score_colors(self):
+        lines = [
+            "Score | Meaning",
+            "90-100 | High leverage"
+        ]
+        result = create_table_block(lines)
+
+        data_row = result["table"]["children"][1]
+        score_cell = data_row["table_row"]["cells"][0][0]
+        assert score_cell["annotations"]["color"] == "green"
+
+    def test_returns_none_for_empty(self):
+        assert create_table_block([]) is None
+
+    def test_pads_short_rows(self):
+        lines = [
+            "A | B | C",
+            "X"  # Only one cell
+        ]
+        result = create_table_block(lines)
+
+        # Should still have 3 cells in second row
+        data_row = result["table"]["children"][1]
+        assert len(data_row["table_row"]["cells"]) == 3
+
+
+class TestCreateCalloutBlock:
+    """Tests for the create_callout_block function."""
+
+    def test_creates_callout_with_emoji(self):
+        result = create_callout_block("Test message", "💡")
+
+        assert result["type"] == "callout"
+        assert result["callout"]["icon"]["emoji"] == "💡"
+        assert result["callout"]["rich_text"][0]["text"]["content"] == "Test message"
+
+    def test_yellow_background_for_lightbulb(self):
+        result = create_callout_block("Tip", "💡")
+        assert result["callout"]["color"] == "yellow_background"
+
+    def test_orange_background_for_warning(self):
+        result = create_callout_block("Warning", "⚠️")
+        assert result["callout"]["color"] == "orange_background"
+
+    def test_blue_background_for_clipboard(self):
+        result = create_callout_block("Info", "📋")
+        assert result["callout"]["color"] == "blue_background"
+
+    def test_gray_background_for_unknown_emoji(self):
+        result = create_callout_block("Text", "🔮")
+        assert result["callout"]["color"] == "gray_background"
+
+
+class TestMarkdownToNotionBlocks:
+    """Tests for the enhanced markdown_to_notion_blocks function."""
+
+    def test_parses_divider(self):
+        result = markdown_to_notion_blocks("---")
+        assert len(result) == 1
+        assert result[0]["type"] == "divider"
+
+    def test_parses_heading_with_emoji(self):
+        result = markdown_to_notion_blocks("# 🎯 My Title")
+        assert result[0]["type"] == "heading_1"
+        assert result[0]["heading_1"]["rich_text"][0]["text"]["content"] == "🎯 My Title"
+
+    def test_parses_table_block(self):
+        markdown = """[TABLE]
+Score | Meaning
+90-100 | High
+[/TABLE]"""
+        result = markdown_to_notion_blocks(markdown)
+
+        assert len(result) == 1
+        assert result[0]["type"] == "table"
+        assert result[0]["table"]["table_width"] == 2
+
+    def test_parses_callout_block(self):
+        markdown = "[CALLOUT:💡] This is a tip [/CALLOUT]"
+        result = markdown_to_notion_blocks(markdown)
+
+        assert len(result) == 1
+        assert result[0]["type"] == "callout"
+        assert result[0]["callout"]["icon"]["emoji"] == "💡"
+        assert "This is a tip" in result[0]["callout"]["rich_text"][0]["text"]["content"]
+
+    def test_parses_multiline_callout(self):
+        markdown = """[CALLOUT:📋] This is line one
+This is line two
+[/CALLOUT]"""
+        result = markdown_to_notion_blocks(markdown)
+
+        assert len(result) == 1
+        assert result[0]["type"] == "callout"
+        assert "line one" in result[0]["callout"]["rich_text"][0]["text"]["content"]
+        assert "line two" in result[0]["callout"]["rich_text"][0]["text"]["content"]
+
+    def test_parses_bullet_list(self):
+        result = markdown_to_notion_blocks("- Item one\n- Item two")
+        assert len(result) == 2
+        assert result[0]["type"] == "bulleted_list_item"
+        assert result[1]["type"] == "bulleted_list_item"
+
+    def test_parses_numbered_list(self):
+        result = markdown_to_notion_blocks("1. First\n2. Second")
+        assert len(result) == 2
+        assert result[0]["type"] == "numbered_list_item"
+
+    def test_parses_bold_text(self):
+        result = markdown_to_notion_blocks("**Bold Header**")
+        assert result[0]["type"] == "paragraph"
+        assert result[0]["paragraph"]["rich_text"][0]["annotations"]["bold"] is True
+        # Should not include ** markers
+        assert "**" not in result[0]["paragraph"]["rich_text"][0]["text"]["content"]
+
+    def test_parses_complex_document(self):
+        markdown = """# 🎯 Horizon Score Rubric
+
+[CALLOUT:📋] Overview text [/CALLOUT]
+
+---
+
+## 📊 Score Ranges
+
+[TABLE]
+Score | Meaning
+90-100 | High
+0-9 | Low
+[/TABLE]
+
+- Bullet point
+"""
+        result = markdown_to_notion_blocks(markdown)
+
+        # Should have: heading, callout, divider, heading, table, bullet
+        types = [b["type"] for b in result]
+        assert "heading_1" in types
+        assert "callout" in types
+        assert "divider" in types
+        assert "heading_2" in types
+        assert "table" in types
+        assert "bulleted_list_item" in types
