@@ -36,7 +36,7 @@ BATCH_SIZE = 40  # Increased for fewer batches (was 25)
 LIST_VALUES = ["Next Actions", "Waiting For", "Someday/Maybe"]
 
 # Parallelization settings - tuned for speed within rate limits
-SCORING_WORKERS = 10  # Parallel Claude API calls (was 6)
+SCORING_WORKERS = 6   # Parallel Claude API calls (10 caused timeouts)
 UPDATE_WORKERS = 10   # Parallel Notion updates (was 8)
 FETCH_WORKERS = 3     # Parallel initial data fetches
 BLOCK_DELETE_WORKERS = 5  # Parallel block deletions
@@ -48,16 +48,26 @@ ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 
 def retry_with_backoff(request_func, max_retries=5):
     """
-    Execute request with exponential backoff for rate limits.
+    Execute request with exponential backoff for rate limits and timeouts.
 
-    Handles HTTP 429 (Too Many Requests) and 503 (Service Unavailable) errors
-    by waiting and retrying with exponential backoff. Respects Retry-After header.
+    Handles:
+    - HTTP 429 (Too Many Requests) and 503 (Service Unavailable) errors
+    - Connection timeouts and read timeouts
+    Retries with exponential backoff. Respects Retry-After header.
     """
     for attempt in range(max_retries):
         try:
             response = request_func()
             response.raise_for_status()
             return response
+        except (requests.Timeout, requests.ConnectionError) as e:
+            # Retry on timeouts and connection errors
+            if attempt < max_retries - 1:
+                wait = (2 ** attempt) + random.uniform(0, 1)
+                print(f"Timeout/connection error. Waiting {wait:.1f}s (attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait)
+            else:
+                raise
         except requests.HTTPError as e:
             if e.response is not None and e.response.status_code in (429, 503) and attempt < max_retries - 1:
                 retry_after = e.response.headers.get('Retry-After')
@@ -467,7 +477,7 @@ def call_claude(prompt, anthropic_key, max_tokens=4096, session=None):
     }
 
     response = retry_with_backoff(
-        lambda: http.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=60)
+        lambda: http.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=120)
     )
 
     data = response.json()
