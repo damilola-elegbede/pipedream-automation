@@ -337,21 +337,212 @@ def parse_blocks_to_text(blocks):
     return "\n".join(text_parts)
 
 
+def get_score_color(score_text):
+    """
+    Return Notion color based on score range.
+
+    Args:
+        score_text: Text containing a score range like "90-100" or "0-9"
+
+    Returns:
+        Notion color string
+    """
+    if "90-100" in score_text or "90+" in score_text:
+        return "green"
+    elif "75-89" in score_text:
+        return "blue"
+    elif "50-74" in score_text:
+        return "default"
+    elif "30-49" in score_text:
+        return "orange"
+    elif "10-29" in score_text:
+        return "gray"
+    elif "0-9" in score_text or "0-29" in score_text:
+        return "red"
+    return "default"
+
+
+def create_table_block(lines):
+    """
+    Create a Notion table block from pipe-separated lines.
+
+    Args:
+        lines: List of lines with | separators (first line is header)
+
+    Returns:
+        Notion table block dict
+    """
+    if not lines:
+        return None
+
+    # Parse rows
+    rows = []
+    for line in lines:
+        # Split by | and clean up cells
+        cells = [cell.strip() for cell in line.split('|') if cell.strip()]
+        if cells:
+            rows.append(cells)
+
+    if not rows:
+        return None
+
+    # Determine table width from first row
+    table_width = len(rows[0])
+
+    # Create table rows
+    table_rows = []
+    for i, row in enumerate(rows):
+        # Pad row if needed
+        while len(row) < table_width:
+            row.append("")
+
+        # Create cells with formatting
+        cells = []
+        for j, cell in enumerate(row[:table_width]):
+            # First row is header (bold)
+            if i == 0:
+                cells.append([{
+                    "type": "text",
+                    "text": {"content": cell},
+                    "annotations": {"bold": True}
+                }])
+            else:
+                # Apply color to score column (first column in score tables)
+                color = get_score_color(cell) if j == 0 else "default"
+                cell_content = [{
+                    "type": "text",
+                    "text": {"content": cell}
+                }]
+                if color != "default":
+                    cell_content[0]["annotations"] = {"color": color}
+                cells.append(cell_content)
+
+        table_rows.append({
+            "type": "table_row",
+            "table_row": {"cells": cells}
+        })
+
+    return {
+        "type": "table",
+        "table": {
+            "table_width": table_width,
+            "has_column_header": True,
+            "has_row_header": False,
+            "children": table_rows
+        }
+    }
+
+
+def create_callout_block(text, emoji="💡"):
+    """
+    Create a Notion callout block with emoji icon.
+
+    Args:
+        text: Callout content text
+        emoji: Emoji to use as icon
+
+    Returns:
+        Notion callout block dict
+    """
+    # Choose background color based on emoji
+    color_map = {
+        "💡": "yellow_background",
+        "📋": "blue_background",
+        "⚠️": "orange_background",
+        "✅": "green_background",
+        "❌": "red_background",
+        "📌": "purple_background",
+        "🎯": "blue_background",
+    }
+    color = color_map.get(emoji, "gray_background")
+
+    return {
+        "type": "callout",
+        "callout": {
+            "rich_text": [{"type": "text", "text": {"content": text}}],
+            "icon": {"type": "emoji", "emoji": emoji},
+            "color": color
+        }
+    }
+
+
 def markdown_to_notion_blocks(markdown_text):
     """
     Convert markdown text to Notion block objects.
 
-    Handles headings, bullet lists, numbered lists, and paragraphs.
+    Handles:
+    - Headings (# ## ###) with emoji support
+    - Bullet lists (- or *)
+    - Numbered lists (1. 2. etc)
+    - Dividers (---)
+    - Tables ([TABLE]...[/TABLE] with | separators)
+    - Callouts ([CALLOUT:emoji]...[/CALLOUT])
+    - Bold text (**text**)
+    - Regular paragraphs
     """
     blocks = []
     lines = markdown_text.split('\n')
+    i = 0
 
-    for line in lines:
+    while i < len(lines):
+        line = lines[i]
         stripped = line.strip()
+
+        # Skip empty lines
         if not stripped:
+            i += 1
             continue
 
-        # Headings
+        # Divider
+        if stripped == '---' or stripped == '***' or stripped == '___':
+            blocks.append({"type": "divider", "divider": {}})
+            i += 1
+            continue
+
+        # Table block: [TABLE] ... [/TABLE]
+        if stripped == '[TABLE]':
+            table_lines = []
+            i += 1
+            while i < len(lines) and lines[i].strip() != '[/TABLE]':
+                table_line = lines[i].strip()
+                if table_line and '|' in table_line:
+                    table_lines.append(table_line)
+                i += 1
+            i += 1  # Skip [/TABLE]
+            table_block = create_table_block(table_lines)
+            if table_block:
+                blocks.append(table_block)
+            continue
+
+        # Callout block: [CALLOUT:emoji] text [/CALLOUT]
+        if stripped.startswith('[CALLOUT:'):
+            # Extract emoji
+            emoji_end = stripped.find(']')
+            if emoji_end > 9:
+                emoji = stripped[9:emoji_end]
+                # Get text - may span multiple lines until [/CALLOUT]
+                text_start = emoji_end + 1
+                callout_text = stripped[text_start:].strip()
+
+                # Check if [/CALLOUT] is on same line
+                if '[/CALLOUT]' in callout_text:
+                    callout_text = callout_text.replace('[/CALLOUT]', '').strip()
+                else:
+                    # Collect multi-line callout
+                    i += 1
+                    while i < len(lines) and '[/CALLOUT]' not in lines[i]:
+                        callout_text += ' ' + lines[i].strip()
+                        i += 1
+                    if i < len(lines) and '[/CALLOUT]' in lines[i]:
+                        callout_text += ' ' + lines[i].replace('[/CALLOUT]', '').strip()
+
+                callout_text = callout_text.strip()
+                if callout_text:
+                    blocks.append(create_callout_block(callout_text, emoji))
+            i += 1
+            continue
+
+        # Headings (with emoji support)
         if stripped.startswith('### '):
             blocks.append({
                 "type": "heading_3",
@@ -382,9 +573,11 @@ def markdown_to_notion_blocks(markdown_text):
             })
         # Bold headers without # (e.g., **Score Range:**)
         elif stripped.startswith('**') and stripped.endswith('**'):
+            # Remove ** markers
+            bold_text = stripped[2:-2]
             blocks.append({
                 "type": "paragraph",
-                "paragraph": {"rich_text": [{"type": "text", "text": {"content": stripped}, "annotations": {"bold": True}}]}
+                "paragraph": {"rich_text": [{"type": "text", "text": {"content": bold_text}, "annotations": {"bold": True}}]}
             })
         # Regular paragraphs
         else:
@@ -392,6 +585,8 @@ def markdown_to_notion_blocks(markdown_text):
                 "type": "paragraph",
                 "paragraph": {"rich_text": [{"type": "text", "text": {"content": stripped}}]}
             })
+
+        i += 1
 
     return blocks
 
@@ -492,7 +687,7 @@ def generate_rubric(horizons_content, anthropic_key, session=None):
     Generate a scoring rubric based on the Horizons of Focus content.
 
     Uses GTD (Getting Things Done) framework for prioritization.
-    Returns the rubric as a string.
+    Returns the rubric as a formatted string with special markers for Notion blocks.
     """
     prompt = f"""You are helping implement a David Allen GTD (Getting Things Done) prioritization system.
 
@@ -520,20 +715,82 @@ The Horizons document includes:
 ## Scoring Guidelines
 Goals spanning MULTIPLE Focus Areas indicate higher strategic leverage.
 
-Score ranges:
-- 90-100: Directly advances a high-leverage goal (3+ Focus Areas) - "This IS who I want to be"
-- 75-89: Directly advances a focused goal (1-2 Focus Areas) - "This supports my goals"
-- 50-74: Supports an Area of Focus with active goals - "This maintains important areas"
-- 30-49: Aligns with values but no direct goal connection - "This feels right but isn't urgent"
-- 10-29: Maintenance/neutral - "Necessary but not identity-aligned"
-- 0-9: Misaligned or distraction - "This pulls me away from who I want to be"
-
 ---
 HORIZONS OF FOCUS:
 {horizons_content}
 ---
 
-Create a specific rubric based on THIS person's stated horizons that can evaluate their tasks. Be concrete - reference their actual goals, values, and areas."""
+## OUTPUT FORMAT (CRITICAL - Follow exactly)
+
+You MUST format your response using these special markers for beautiful Notion formatting:
+
+1. Use emojis in headers: # 🎯 Title
+2. Use [CALLOUT:emoji] text [/CALLOUT] for important callout boxes
+3. Use [TABLE] and [/TABLE] for tables with | separators
+4. Use --- for section dividers
+
+Here is the EXACT structure to follow:
+
+# 🎯 Horizon Score Rubric
+
+[CALLOUT:📋] This rubric evaluates how well your tasks align with your stated Horizons of Focus - your purpose, values, vision, and goals. Use it to prioritize flexible tasks based on who you want to be. [/CALLOUT]
+
+---
+
+## 📊 Score Ranges
+
+[TABLE]
+Score | Meaning | Criteria
+90-100 | 🔥 High Leverage | Directly advances a goal spanning 3+ Focus Areas - "This IS who I want to be"
+75-89 | ✅ Goal-Aligned | Directly advances a focused goal (1-2 Focus Areas) - "This supports my goals"
+50-74 | 📁 Area Support | Supports an Area of Focus with active goals - "This maintains important areas"
+30-49 | 💭 Values-Aligned | Aligns with values but no direct goal connection - "This feels right but isn't urgent"
+10-29 | 🔧 Maintenance | Necessary but not identity-aligned - "Needs doing but doesn't define me"
+0-9 | ⚠️ Misaligned | Distraction from priorities - "This pulls me away from who I want to be"
+[/TABLE]
+
+---
+
+## 🎯 Your High-Leverage Goals (90-100 points)
+
+[CALLOUT:💡] Tasks that directly advance these goals score 90-100. These goals span multiple Focus Areas, meaning progress here creates compounding benefits. [/CALLOUT]
+
+(List their actual goals that span 3+ focus areas with descriptions)
+
+---
+
+## ✅ Your Focused Goals (75-89 points)
+
+(List their goals that span 1-2 focus areas)
+
+---
+
+## 📁 Your Active Focus Areas (50-74 points)
+
+[TABLE]
+Focus Area | Active Goals | Examples
+(area) | (count) | (example tasks)
+[/TABLE]
+
+---
+
+## 💭 Values & Purpose Alignment (30-49 points)
+
+(Reference their actual core values and purpose statement)
+
+---
+
+## 🔧 Maintenance Tasks (10-29 points)
+
+(General life maintenance that doesn't advance goals)
+
+---
+
+## ⚠️ Potential Distractions (0-9 points)
+
+[CALLOUT:⚠️] Be cautious of tasks that don't align with any stated goal, value, or focus area. These may be distractions pulling you away from your priorities. [/CALLOUT]
+
+Create this rubric based on THIS person's specific horizons. Be concrete - use their actual goals, values, and areas."""
 
     print("Generating scoring rubric from Horizons of Focus...")
     rubric = call_claude(prompt, anthropic_key, session=session)
