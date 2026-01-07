@@ -80,3 +80,20 @@ Thumbs.db
 # Pipedream deployment cookies (sensitive)
 cookies.json
 **/cookies.json
+
+# Backup files
+*.bk
+*.bak
+*.backup
+*.orig
+
+# Editor swap files
+*.swp
+*.swo
+*~
+
+# Local development
+.local/
+
+# Claude Code
+.claude/

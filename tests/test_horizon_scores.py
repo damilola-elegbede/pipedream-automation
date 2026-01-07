@@ -312,14 +312,15 @@ class TestScoreTasksBatch:
         assert result[0]["score"] == 75
 
     @patch('steps.update_horizon_scores.call_claude')
-    def test_returns_empty_on_invalid_json(self, mock_claude):
+    def test_raises_on_invalid_json(self, mock_claude):
+        """Test that invalid JSON raises HorizonScoringError (fail loudly)."""
+        from steps.update_horizon_scores import HorizonScoringError
         mock_claude.return_value = "This is not valid JSON"
 
         tasks = [{"id": "task_1", "title": "Task 1", "list": "Next Actions", "project": "", "area": "", "priority": "", "due_date": "", "notes": ""}]
 
-        result = score_tasks_batch(tasks, "test rubric", "test_key")
-
-        assert result == []
+        with pytest.raises(HorizonScoringError, match="No JSON array found"):
+            score_tasks_batch(tasks, "test rubric", "test_key")
 
 
 class TestIntegration:

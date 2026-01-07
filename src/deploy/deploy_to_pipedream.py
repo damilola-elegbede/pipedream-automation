@@ -228,11 +228,17 @@ class PipedreamSyncer:
         if not self.page:
             return False
 
-        # Navigate to Pipedream
-        self.log("Navigating to Pipedream...")
+        # First, check if already logged in by navigating to the base URL
+        self.log("Checking login status...")
         await self.page.goto(self.config.pipedream_base_url, wait_until="networkidle")
 
-        # Check if already logged in
+        # Check if already logged in - by selector OR by URL redirect
+        # When logged in, Pipedream often redirects to /workflows or /projects
+        current_url = self.page.url
+        if "/workflows" in current_url or "/projects" in current_url:
+            self.log("Already logged in (redirected to dashboard)!")
+            return True
+
         try:
             await self.page.wait_for_selector(LOGGED_IN_INDICATOR, timeout=3000)
             self.log("Already logged in!")
@@ -240,7 +246,13 @@ class PipedreamSyncer:
         except PlaywrightTimeout:
             pass
 
-        # Not logged in - prompt user
+        # Not logged in - navigate to LOGIN PAGE (not landing page!)
+        # This ensures the login form is visible on fresh machines
+        login_url = f"{self.config.pipedream_base_url}/login"
+        self.log(f"Not logged in. Navigating to {login_url}...")
+        await self.page.goto(login_url, wait_until="networkidle")
+
+        # Prompt user
         print("\n" + "=" * 50)
         print("PIPEDREAM LOGIN REQUIRED")
         print("=" * 50)
