@@ -13,6 +13,9 @@ reviews:
     enabled: true
     auto_incremental_review: true
     drafts: false
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT REVIEW"
 
   path_filters:
     - "!venv/**"
@@ -48,10 +51,6 @@ reviews:
         - Proper mocking patterns
         - Clear test naming
 
-  ignore_title_keywords:
-    - "WIP"
-    - "DO NOT REVIEW"
-
 chat:
   auto_reply: true
 
@@ -60,12 +59,3 @@ knowledge_base:
   learnings:
     scope: local
 
-tools:
-  ruff:
-    enabled: true
-  mypy:
-    enabled: true
-  bandit:
-    enabled: true
-  shellcheck:
-    enabled: true

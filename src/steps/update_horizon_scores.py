@@ -26,7 +26,6 @@ class HorizonScoringError(Exception):
     This exception is used to FAIL the Pipedream job loudly instead of
     silently continuing with partial or no results.
     """
-    pass
 
 
 # --- Configuration ---
@@ -64,7 +63,7 @@ def retry_with_backoff(request_func, max_retries=5):
             # Retry on timeouts and connection errors
             if attempt < max_retries - 1:
                 wait = (2 ** attempt) + random.uniform(0, 1)
-                print(f"Timeout/connection error. Waiting {wait:.1f}s (attempt {attempt + 1}/{max_retries})")
+                print(f"Timeout/connection error: {e}. Waiting {wait:.1f}s (attempt {attempt + 1}/{max_retries})")
                 time.sleep(wait)
             else:
                 raise
@@ -611,7 +610,7 @@ def save_rubric_to_notion(rubric_text, page_id, headers, session=None):
     print(f"    Clearing {len(existing_blocks)} existing blocks...")
 
     # 2. Delete existing blocks IN PARALLEL for speed
-    def delete_block(block_id):
+    def delete_block(block_id: str) -> bool:
         """Delete a single block."""
         url = f"{NOTION_API_BASE}/blocks/{block_id}"
         try:
@@ -1028,7 +1027,7 @@ IMPORTANT: Return ONLY the JSON array, no other text."""
         raise HorizonScoringError(
             f"Failed to parse Claude response as JSON: {e}. "
             f"Response was: {response_text[:500]}..."
-        )
+        ) from e
 
 
 def update_horizon_score(task_id, score, headers, session=None):
@@ -1352,6 +1351,10 @@ def handler(pd: "pipedream"):
     except Exception as e:
         # FAIL LOUDLY - wrap unexpected errors and re-raise
         raise HorizonScoringError(f"Unexpected error during execution: {e}") from e
+    finally:
+        # Clean up sessions to release TCP connections
+        notion_session.close()
+        anthropic_session.close()
 
     # --- 9. Return summary ---
     status = "Completed" if not errors else "Partial"

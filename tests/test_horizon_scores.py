@@ -23,6 +23,7 @@ from steps.update_horizon_scores import (
     get_score_color,
     create_table_block,
     create_callout_block,
+    HorizonScoringError,
 )
 
 
@@ -318,7 +319,6 @@ class TestScoreTasksBatch:
     @patch('steps.update_horizon_scores.call_claude')
     def test_raises_on_invalid_json(self, mock_claude):
         """Test that invalid JSON raises HorizonScoringError (fail loudly)."""
-        from steps.update_horizon_scores import HorizonScoringError
         mock_claude.return_value = "This is not valid JSON"
 
         tasks = [{"id": "task_1", "title": "Task 1", "list": "Next Actions", "project": "", "area": "", "priority": "", "due_date": "", "notes": ""}]
