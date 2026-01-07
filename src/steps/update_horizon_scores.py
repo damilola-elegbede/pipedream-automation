@@ -18,15 +18,27 @@ import json
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+
+# --- Custom Exceptions ---
+class HorizonScoringError(Exception):
+    """Raised when horizon scoring fails critically.
+
+    This exception is used to FAIL the Pipedream job loudly instead of
+    silently continuing with partial or no results.
+    """
+    pass
+
+
 # --- Configuration ---
 NOTION_API_VERSION = "2022-06-28"
 CLAUDE_MODEL = "claude-opus-4-5-20251101"
-BATCH_SIZE = 20  # Increased from 15 to reduce number of batches
+BATCH_SIZE = 25  # Increased to reduce number of batches (was 20)
 LIST_VALUES = ["Next Actions", "Waiting For", "Someday/Maybe"]
 
-# Parallelization settings
-SCORING_WORKERS = 4   # Parallel Claude API calls
-UPDATE_WORKERS = 5    # Parallel Notion updates
+# Parallelization settings - tuned for speed within rate limits
+SCORING_WORKERS = 6   # Parallel Claude API calls (was 4)
+UPDATE_WORKERS = 8    # Parallel Notion updates (was 5)
+FETCH_WORKERS = 3     # Parallel initial data fetches
 
 # --- API Endpoints ---
 NOTION_API_BASE = "https://api.notion.com/v1"
@@ -121,14 +133,14 @@ def find_inline_databases(blocks):
 
 def fetch_in_progress_goals(database_id, headers):
     """
-    Query goals database for In Progress items with Focus Areas.
+    Query goals database for In Progress items with Focus Areas and descriptions.
 
     Args:
         database_id: The Notion database ID
         headers: Notion API headers
 
     Returns:
-        List of goal dicts with name, focus_areas, and focus_count,
+        List of goal dicts with name, description, focus_areas, and focus_count,
         sorted by focus_count descending (higher leverage first)
     """
     url = f"{NOTION_API_BASE}/databases/{database_id}/query"
@@ -174,6 +186,15 @@ def fetch_in_progress_goals(database_id, headers):
             if title_prop.get("type") == "title":
                 title = extract_text_from_rich_text(title_prop.get("title", []))
 
+            # Extract goal description (rich_text property)
+            description = ""
+            desc_prop = props.get("Description", {})
+            if desc_prop.get("type") == "rich_text":
+                description = extract_text_from_rich_text(desc_prop.get("rich_text", []))
+                # Truncate long descriptions to keep prompts manageable
+                if len(description) > 500:
+                    description = description[:500] + "..."
+
             # Extract Focus Areas (multi-select)
             focus_areas = []
             focus_prop = props.get("Focus Area", {})
@@ -183,6 +204,7 @@ def fetch_in_progress_goals(database_id, headers):
             if title:  # Only include goals with titles
                 goals.append({
                     "name": title,
+                    "description": description,
                     "focus_areas": focus_areas,
                     "focus_count": len(focus_areas)
                 })
@@ -679,22 +701,24 @@ IMPORTANT: Return ONLY the JSON array, no other text."""
 
     response_text = call_claude(prompt, anthropic_key)
 
-    # Parse JSON response
+    # Parse JSON response - FAIL LOUDLY on parse errors
     try:
         # Find JSON array in response
         start_idx = response_text.find('[')
         end_idx = response_text.rfind(']') + 1
         if start_idx == -1 or end_idx == 0:
-            print(f"  No JSON array found in Claude response")
-            print(f"  Response was: {response_text[:500]}...")
-            return []
+            raise HorizonScoringError(
+                f"No JSON array found in Claude response. "
+                f"Response was: {response_text[:500]}..."
+            )
         json_str = response_text[start_idx:end_idx]
         scores = json.loads(json_str)
         return scores
     except json.JSONDecodeError as e:
-        print(f"  Error parsing Claude response as JSON: {e}")
-        print(f"  Response was: {response_text[:500]}...")
-        return []
+        raise HorizonScoringError(
+            f"Failed to parse Claude response as JSON: {e}. "
+            f"Response was: {response_text[:500]}..."
+        )
 
 
 def update_horizon_score(task_id, score, headers):
@@ -731,8 +755,12 @@ def score_all_batches_parallel(task_batches, rubric, anthropic_key):
 
     Returns:
         List of score dicts with task_id, score, and reasoning
+
+    Raises:
+        HorizonScoringError: If ANY batch fails to score (fail loudly)
     """
     all_scores = []
+    failed_batches = []
     total_batches = len(task_batches)
 
     print(f"  Scoring {total_batches} batches with {SCORING_WORKERS} parallel workers...")
@@ -753,6 +781,15 @@ def score_all_batches_parallel(task_batches, rubric, anthropic_key):
                 print(f"  Batch {batch_num + 1}/{total_batches} complete ({len(scores)} scores)")
             except Exception as e:
                 print(f"  Batch {batch_num + 1}/{total_batches} failed: {e}")
+                failed_batches.append((batch_num + 1, str(e)))
+
+    # FAIL LOUDLY if ANY batch failed
+    if failed_batches:
+        failed_info = ", ".join([f"Batch {num}: {err}" for num, err in failed_batches])
+        raise HorizonScoringError(
+            f"{len(failed_batches)}/{total_batches} batches failed to score. "
+            f"Failures: {failed_info}"
+        )
 
     return all_scores
 
@@ -820,6 +857,15 @@ def update_scores_parallel(scores, headers):
                     "error": "Failed to update Notion"
                 })
 
+    # FAIL LOUDLY if error rate exceeds 20%
+    if total > 0:
+        error_rate = len(errors) / total
+        if error_rate > 0.20:
+            raise HorizonScoringError(
+                f"Update failure rate too high: {len(errors)}/{total} ({error_rate:.0%}) failed. "
+                f"Threshold is 20%. First few errors: {errors[:3]}"
+            )
+
     return successful, errors
 
 
@@ -861,47 +907,74 @@ def handler(pd: "pipedream"):
     errors = []
 
     try:
-        # --- 3. Fetch Horizons of Focus content ---
-        print("Step 1: Fetching Horizons of Focus page content...")
-        blocks = fetch_page_blocks(horizons_page_id, notion_headers)
-        horizons_content = parse_blocks_to_text(blocks)
+        # --- 3. Fetch all data in PARALLEL for speed ---
+        print("Step 1: Fetching Horizons, Core Values, and Goals in parallel...")
+
+        # Helper functions for parallel execution
+        def fetch_horizons():
+            blocks = fetch_page_blocks(horizons_page_id, notion_headers)
+            content = parse_blocks_to_text(blocks)
+            return blocks, content
+
+        def fetch_values_safe():
+            if not core_values_db_id:
+                return None
+            try:
+                return fetch_core_values(core_values_db_id, notion_headers)
+            except Exception as e:
+                print(f"  Warning: Could not fetch Core Values: {e}")
+                return None
+
+        def fetch_goals_safe():
+            if not goals_db_id:
+                return None
+            try:
+                return fetch_in_progress_goals(goals_db_id, notion_headers)
+            except Exception as e:
+                print(f"  Warning: Could not fetch Goals: {e}")
+                return None
+
+        # Execute all fetches in parallel
+        with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as executor:
+            horizons_future = executor.submit(fetch_horizons)
+            values_future = executor.submit(fetch_values_safe)
+            goals_future = executor.submit(fetch_goals_safe)
+
+            # Wait for all results
+            blocks, horizons_content = horizons_future.result()
+            core_values = values_future.result()
+            goals = goals_future.result()
+
         print(f"  Fetched {len(blocks)} blocks, {len(horizons_content)} characters of content")
 
         if not horizons_content.strip():
-            raise Exception("Horizons of Focus page is empty or has no readable content")
+            raise HorizonScoringError("Horizons of Focus page is empty or has no readable content")
 
-        # --- 3b. Fetch Core Values from inline database (if configured) ---
-        if core_values_db_id:
-            print("  Fetching Core Values database...")
-            try:
-                core_values = fetch_core_values(core_values_db_id, notion_headers)
-                if core_values:
-                    horizons_content += "\n\n## Core Values\n"
-                    for value in core_values:
-                        horizons_content += f"• {value}\n"
-                    print(f"  Added {len(core_values)} core values")
-                else:
-                    print("  No core values found")
-            except Exception as e:
-                print(f"  Warning: Could not fetch Core Values: {e}")
+        # --- 3b. Append Core Values to horizons content ---
+        if core_values:
+            horizons_content += "\n\n## Core Values\n"
+            for value in core_values:
+                horizons_content += f"• {value}\n"
+            print(f"  Added {len(core_values)} core values")
+        elif core_values_db_id:
+            print("  No core values found")
         else:
             print("  NOTION_CORE_VALUES_DB_ID not set, skipping Core Values")
 
-        # --- 3c. Fetch In Progress Goals from inline database (if configured) ---
-        if goals_db_id:
-            print("  Fetching Goals database...")
-            try:
-                goals = fetch_in_progress_goals(goals_db_id, notion_headers)
-                if goals:
-                    horizons_content += "\n\n## In Progress Goals (ordered by cross-area impact)\n"
-                    for goal in goals:
-                        areas_str = ", ".join(goal["focus_areas"]) if goal["focus_areas"] else "No specific area"
-                        horizons_content += f"• {goal['name']} [Focus Areas: {areas_str}]\n"
-                    print(f"  Added {len(goals)} in-progress goals")
+        # --- 3c. Append In Progress Goals to horizons content ---
+        if goals:
+            horizons_content += "\n\n## In Progress Goals (ordered by cross-area impact)\n"
+            for goal in goals:
+                areas_str = ", ".join(goal["focus_areas"]) if goal["focus_areas"] else "No specific area"
+                # Include description if available
+                desc = goal.get("description", "")
+                if desc:
+                    horizons_content += f"• {goal['name']} [Focus Areas: {areas_str}]\n  Description: {desc}\n"
                 else:
-                    print("  No in-progress goals found")
-            except Exception as e:
-                print(f"  Warning: Could not fetch Goals: {e}")
+                    horizons_content += f"• {goal['name']} [Focus Areas: {areas_str}]\n"
+            print(f"  Added {len(goals)} in-progress goals")
+        elif goals_db_id:
+            print("  No in-progress goals found")
         else:
             print("  NOTION_GOALS_DB_ID not set, skipping Goals")
 
@@ -949,9 +1022,12 @@ def handler(pd: "pipedream"):
         print("\nStep 6: Updating Horizon Scores in Notion (parallel)...")
         successful_updates, errors = update_scores_parallel(all_scores, notion_headers)
 
+    except HorizonScoringError:
+        # FAIL LOUDLY - re-raise scoring errors to fail the Pipedream job
+        raise
     except Exception as e:
-        print(f"Error during execution: {e}")
-        errors.append({"error": str(e), "type": "execution_error"})
+        # FAIL LOUDLY - wrap unexpected errors and re-raise
+        raise HorizonScoringError(f"Unexpected error during execution: {e}") from e
 
     # --- 9. Return summary ---
     status = "Completed" if not errors else "Partial"
