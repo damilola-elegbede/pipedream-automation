@@ -1,0 +1,61 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: en-US
+tone_instructions: "Be constructive and educational. Focus on Python best practices, type safety, error handling, and API integration patterns. Explain the 'why' behind suggestions."
+early_access: false
+
+reviews:
+  profile: assertive
+  high_level_summary: true
+  request_changes_workflow: true
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT REVIEW"
+
+  path_filters:
+    - "!venv/**"
+    - "!.venv/**"
+    - "!__pycache__/**"
+    - "!*.pyc"
+    - "!.pytest_cache/**"
+    - "!.mypy_cache/**"
+    - "!.coverage"
+    - "!htmlcov/**"
+    - "!.tmp/**"
+
+  path_instructions:
+    - path: "src/steps/**/*.py"
+      instructions: |
+        Pipedream workflow steps. Review for:
+        - Error handling and retry logic
+        - API integration best practices
+        - Type hints and docstrings
+        - Secure credential handling
+
+    - path: "src/deploy/**/*.py"
+      instructions: |
+        Deployment automation. Review for:
+        - Browser automation reliability
+        - Error recovery patterns
+        - Configuration validation
+
+    - path: "tests/**/*.py"
+      instructions: |
+        Test files. Review for:
+        - Coverage of edge cases
+        - Proper mocking patterns
+        - Clear test naming
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  opt_out: false
+  learnings:
+    scope: local
+

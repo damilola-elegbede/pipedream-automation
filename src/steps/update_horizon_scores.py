@@ -18,15 +18,27 @@ import json
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+
+# --- Custom Exceptions ---
+class HorizonScoringError(Exception):
+    """Raised when horizon scoring fails critically.
+
+    This exception is used to FAIL the Pipedream job loudly instead of
+    silently continuing with partial or no results.
+    """
+
+
 # --- Configuration ---
 NOTION_API_VERSION = "2022-06-28"
 CLAUDE_MODEL = "claude-opus-4-5-20251101"
-BATCH_SIZE = 20  # Increased from 15 to reduce number of batches
+BATCH_SIZE = 40  # Increased for fewer batches (was 25)
 LIST_VALUES = ["Next Actions", "Waiting For", "Someday/Maybe"]
 
-# Parallelization settings
-SCORING_WORKERS = 4   # Parallel Claude API calls
-UPDATE_WORKERS = 5    # Parallel Notion updates
+# Parallelization settings - tuned for speed within rate limits
+SCORING_WORKERS = 6   # Parallel Claude API calls (10 caused timeouts)
+UPDATE_WORKERS = 10   # Parallel Notion updates (was 8)
+FETCH_WORKERS = 3     # Parallel initial data fetches
+BLOCK_DELETE_WORKERS = 5  # Parallel block deletions
 
 # --- API Endpoints ---
 NOTION_API_BASE = "https://api.notion.com/v1"
@@ -35,16 +47,26 @@ ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 
 def retry_with_backoff(request_func, max_retries=5):
     """
-    Execute request with exponential backoff for rate limits.
+    Execute request with exponential backoff for rate limits and timeouts.
 
-    Handles HTTP 429 (Too Many Requests) and 503 (Service Unavailable) errors
-    by waiting and retrying with exponential backoff. Respects Retry-After header.
+    Handles:
+    - HTTP 429 (Too Many Requests) and 503 (Service Unavailable) errors
+    - Connection timeouts and read timeouts
+    Retries with exponential backoff. Respects Retry-After header.
     """
     for attempt in range(max_retries):
         try:
             response = request_func()
             response.raise_for_status()
             return response
+        except (requests.Timeout, requests.ConnectionError) as e:
+            # Retry on timeouts and connection errors
+            if attempt < max_retries - 1:
+                wait = (2 ** attempt) + random.uniform(0, 1)
+                print(f"Timeout/connection error: {e}. Waiting {wait:.1f}s (attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait)
+            else:
+                raise
         except requests.HTTPError as e:
             if e.response is not None and e.response.status_code in (429, 503) and attempt < max_retries - 1:
                 retry_after = e.response.headers.get('Retry-After')
@@ -62,14 +84,20 @@ def retry_with_backoff(request_func, max_retries=5):
     raise Exception(f"Max retries ({max_retries}) exceeded")
 
 
-def fetch_page_blocks(page_id, headers):
+def fetch_page_blocks(page_id, headers, session=None):
     """
     Recursively fetch all blocks from a Notion page.
 
+    Args:
+        page_id: Notion page ID
+        headers: API headers
+        session: Optional requests.Session for connection pooling
+
     Returns a list of block objects with their content.
     """
+    http = session or requests
     all_blocks = []
-    url = f"{NOTION_API_BASE}/blocks/{page_id}/children"
+    base_url = f"{NOTION_API_BASE}/blocks/{page_id}/children"
     start_cursor = None
 
     while True:
@@ -78,7 +106,7 @@ def fetch_page_blocks(page_id, headers):
             params["start_cursor"] = start_cursor
 
         response = retry_with_backoff(
-            lambda u=url, p=params: requests.get(u, headers=headers, params=p, timeout=60)
+            lambda u=base_url, p=params: http.get(u, headers=headers, params=p, timeout=60)
         )
         data = response.json()
         blocks = data.get("results", [])
@@ -88,7 +116,7 @@ def fetch_page_blocks(page_id, headers):
         for block in blocks:
             if block.get("has_children"):
                 block_id = block.get("id")
-                child_blocks = fetch_page_blocks(block_id, headers)
+                child_blocks = fetch_page_blocks(block_id, headers, session)
                 all_blocks.extend(child_blocks)
 
         if not data.get("has_more"):
@@ -119,21 +147,23 @@ def find_inline_databases(blocks):
     return databases
 
 
-def fetch_in_progress_goals(database_id, headers):
+def fetch_in_progress_goals(database_id, headers, session=None):
     """
-    Query goals database for In Progress items with Focus Areas.
+    Query goals database for In Progress items with Focus Areas and descriptions.
 
     Args:
         database_id: The Notion database ID
         headers: Notion API headers
+        session: Optional requests.Session for connection pooling
 
     Returns:
-        List of goal dicts with name, focus_areas, and focus_count,
+        List of goal dicts with name, description, focus_areas, and focus_count,
         sorted by focus_count descending (higher leverage first)
     """
+    http = session or requests
     url = f"{NOTION_API_BASE}/databases/{database_id}/query"
 
-    # Try with Status filter first, fall back to no filter if it fails
+    # Start with Status filter, fallback inline if it fails (no redundant test call)
     base_payload = {
         "filter": {
             "property": "Status",
@@ -141,16 +171,6 @@ def fetch_in_progress_goals(database_id, headers):
         }
     }
     use_filter = True
-
-    # Test if filter works
-    try:
-        test_response = retry_with_backoff(
-            lambda: requests.post(url, headers=headers, json=base_payload, timeout=60)
-        )
-        test_response.json()  # Validate response
-    except Exception as e:
-        print(f"    Status filter failed ({e}), fetching all goals...")
-        use_filter = False
 
     goals = []
     start_cursor = None
@@ -160,10 +180,25 @@ def fetch_in_progress_goals(database_id, headers):
         if start_cursor:
             payload["start_cursor"] = start_cursor
 
-        response = retry_with_backoff(
-            lambda p=payload: requests.post(url, headers=headers, json=p, timeout=60)
-        )
-        data = response.json()
+        try:
+            response = retry_with_backoff(
+                lambda p=payload: http.post(url, headers=headers, json=p, timeout=60)
+            )
+            data = response.json()
+        except Exception as e:
+            # Filter failed - retry with no filter (inline fallback, no redundant test)
+            if use_filter:
+                print(f"    Status filter failed ({e}), fetching all goals...")
+                use_filter = False
+                payload = {}
+                if start_cursor:
+                    payload["start_cursor"] = start_cursor
+                response = retry_with_backoff(
+                    lambda p=payload: http.post(url, headers=headers, json=p, timeout=60)
+                )
+                data = response.json()
+            else:
+                raise
 
         for page in data.get("results", []):
             props = page.get("properties", {})
@@ -174,6 +209,15 @@ def fetch_in_progress_goals(database_id, headers):
             if title_prop.get("type") == "title":
                 title = extract_text_from_rich_text(title_prop.get("title", []))
 
+            # Extract goal description (rich_text property)
+            description = ""
+            desc_prop = props.get("Description", {})
+            if desc_prop.get("type") == "rich_text":
+                description = extract_text_from_rich_text(desc_prop.get("rich_text", []))
+                # Truncate long descriptions to keep prompts manageable
+                if len(description) > 500:
+                    description = description[:500] + "..."
+
             # Extract Focus Areas (multi-select)
             focus_areas = []
             focus_prop = props.get("Focus Area", {})
@@ -183,6 +227,7 @@ def fetch_in_progress_goals(database_id, headers):
             if title:  # Only include goals with titles
                 goals.append({
                     "name": title,
+                    "description": description,
                     "focus_areas": focus_areas,
                     "focus_count": len(focus_areas)
                 })
@@ -203,21 +248,23 @@ def extract_text_from_rich_text(rich_text_array):
     return "".join(item.get("plain_text", "") for item in rich_text_array)
 
 
-def fetch_core_values(database_id, headers):
+def fetch_core_values(database_id, headers, session=None):
     """
     Query Core Values database and extract values.
 
     Args:
         database_id: The Notion database ID for Core Values
         headers: Notion API headers
+        session: Optional requests.Session for connection pooling
 
     Returns:
         List of core value names
     """
+    http = session or requests
     url = f"{NOTION_API_BASE}/databases/{database_id}/query"
 
     response = retry_with_backoff(
-        lambda: requests.post(url, headers=headers, json={}, timeout=60)
+        lambda: http.post(url, headers=headers, json={}, timeout=60)
     )
 
     values = []
@@ -289,21 +336,212 @@ def parse_blocks_to_text(blocks):
     return "\n".join(text_parts)
 
 
+def get_score_color(score_text):
+    """
+    Return Notion color based on score range.
+
+    Args:
+        score_text: Text containing a score range like "90-100" or "0-9"
+
+    Returns:
+        Notion color string
+    """
+    if "90-100" in score_text or "90+" in score_text:
+        return "green"
+    elif "75-89" in score_text:
+        return "blue"
+    elif "50-74" in score_text:
+        return "default"
+    elif "30-49" in score_text:
+        return "orange"
+    elif "10-29" in score_text:
+        return "gray"
+    elif "0-9" in score_text or "0-29" in score_text:
+        return "red"
+    return "default"
+
+
+def create_table_block(lines):
+    """
+    Create a Notion table block from pipe-separated lines.
+
+    Args:
+        lines: List of lines with | separators (first line is header)
+
+    Returns:
+        Notion table block dict
+    """
+    if not lines:
+        return None
+
+    # Parse rows
+    rows = []
+    for line in lines:
+        # Split by | and clean up cells
+        cells = [cell.strip() for cell in line.split('|') if cell.strip()]
+        if cells:
+            rows.append(cells)
+
+    if not rows:
+        return None
+
+    # Determine table width from first row
+    table_width = len(rows[0])
+
+    # Create table rows
+    table_rows = []
+    for i, row in enumerate(rows):
+        # Pad row if needed
+        while len(row) < table_width:
+            row.append("")
+
+        # Create cells with formatting
+        cells = []
+        for j, cell in enumerate(row[:table_width]):
+            # First row is header (bold)
+            if i == 0:
+                cells.append([{
+                    "type": "text",
+                    "text": {"content": cell},
+                    "annotations": {"bold": True}
+                }])
+            else:
+                # Apply color to score column (first column in score tables)
+                color = get_score_color(cell) if j == 0 else "default"
+                cell_content = [{
+                    "type": "text",
+                    "text": {"content": cell}
+                }]
+                if color != "default":
+                    cell_content[0]["annotations"] = {"color": color}
+                cells.append(cell_content)
+
+        table_rows.append({
+            "type": "table_row",
+            "table_row": {"cells": cells}
+        })
+
+    return {
+        "type": "table",
+        "table": {
+            "table_width": table_width,
+            "has_column_header": True,
+            "has_row_header": False,
+            "children": table_rows
+        }
+    }
+
+
+def create_callout_block(text, emoji="💡"):
+    """
+    Create a Notion callout block with emoji icon.
+
+    Args:
+        text: Callout content text
+        emoji: Emoji to use as icon
+
+    Returns:
+        Notion callout block dict
+    """
+    # Choose background color based on emoji
+    color_map = {
+        "💡": "yellow_background",
+        "📋": "blue_background",
+        "⚠️": "orange_background",
+        "✅": "green_background",
+        "❌": "red_background",
+        "📌": "purple_background",
+        "🎯": "blue_background",
+    }
+    color = color_map.get(emoji, "gray_background")
+
+    return {
+        "type": "callout",
+        "callout": {
+            "rich_text": [{"type": "text", "text": {"content": text}}],
+            "icon": {"type": "emoji", "emoji": emoji},
+            "color": color
+        }
+    }
+
+
 def markdown_to_notion_blocks(markdown_text):
     """
     Convert markdown text to Notion block objects.
 
-    Handles headings, bullet lists, numbered lists, and paragraphs.
+    Handles:
+    - Headings (# ## ###) with emoji support
+    - Bullet lists (- or *)
+    - Numbered lists (1. 2. etc)
+    - Dividers (---)
+    - Tables ([TABLE]...[/TABLE] with | separators)
+    - Callouts ([CALLOUT:emoji]...[/CALLOUT])
+    - Bold text (**text**)
+    - Regular paragraphs
     """
     blocks = []
     lines = markdown_text.split('\n')
+    i = 0
 
-    for line in lines:
+    while i < len(lines):
+        line = lines[i]
         stripped = line.strip()
+
+        # Skip empty lines
         if not stripped:
+            i += 1
             continue
 
-        # Headings
+        # Divider
+        if stripped == '---' or stripped == '***' or stripped == '___':
+            blocks.append({"type": "divider", "divider": {}})
+            i += 1
+            continue
+
+        # Table block: [TABLE] ... [/TABLE]
+        if stripped == '[TABLE]':
+            table_lines = []
+            i += 1
+            while i < len(lines) and lines[i].strip() != '[/TABLE]':
+                table_line = lines[i].strip()
+                if table_line and '|' in table_line:
+                    table_lines.append(table_line)
+                i += 1
+            i += 1  # Skip [/TABLE]
+            table_block = create_table_block(table_lines)
+            if table_block:
+                blocks.append(table_block)
+            continue
+
+        # Callout block: [CALLOUT:emoji] text [/CALLOUT]
+        if stripped.startswith('[CALLOUT:'):
+            # Extract emoji
+            emoji_end = stripped.find(']')
+            if emoji_end > 9:
+                emoji = stripped[9:emoji_end]
+                # Get text - may span multiple lines until [/CALLOUT]
+                text_start = emoji_end + 1
+                callout_text = stripped[text_start:].strip()
+
+                # Check if [/CALLOUT] is on same line
+                if '[/CALLOUT]' in callout_text:
+                    callout_text = callout_text.replace('[/CALLOUT]', '').strip()
+                else:
+                    # Collect multi-line callout
+                    i += 1
+                    while i < len(lines) and '[/CALLOUT]' not in lines[i]:
+                        callout_text += ' ' + lines[i].strip()
+                        i += 1
+                    if i < len(lines) and '[/CALLOUT]' in lines[i]:
+                        callout_text += ' ' + lines[i].replace('[/CALLOUT]', '').strip()
+
+                callout_text = callout_text.strip()
+                if callout_text:
+                    blocks.append(create_callout_block(callout_text, emoji))
+            i += 1
+            continue
+
+        # Headings (with emoji support)
         if stripped.startswith('### '):
             blocks.append({
                 "type": "heading_3",
@@ -334,9 +572,11 @@ def markdown_to_notion_blocks(markdown_text):
             })
         # Bold headers without # (e.g., **Score Range:**)
         elif stripped.startswith('**') and stripped.endswith('**'):
+            # Remove ** markers
+            bold_text = stripped[2:-2]
             blocks.append({
                 "type": "paragraph",
-                "paragraph": {"rich_text": [{"type": "text", "text": {"content": stripped}, "annotations": {"bold": True}}]}
+                "paragraph": {"rich_text": [{"type": "text", "text": {"content": bold_text}, "annotations": {"bold": True}}]}
             })
         # Regular paragraphs
         else:
@@ -345,10 +585,12 @@ def markdown_to_notion_blocks(markdown_text):
                 "paragraph": {"rich_text": [{"type": "text", "text": {"content": stripped}}]}
             })
 
+        i += 1
+
     return blocks
 
 
-def save_rubric_to_notion(rubric_text, page_id, headers):
+def save_rubric_to_notion(rubric_text, page_id, headers, session=None):
     """
     Clear existing blocks and save new rubric to a Notion page.
 
@@ -356,26 +598,34 @@ def save_rubric_to_notion(rubric_text, page_id, headers):
         rubric_text: The rubric markdown text
         page_id: The Notion page ID to update
         headers: Notion API headers
+        session: Optional requests.Session for connection pooling
 
     Returns:
         True if successful
     """
+    http = session or requests
+
     # 1. Fetch existing blocks to delete
-    existing_blocks = fetch_page_blocks(page_id, headers)
+    existing_blocks = fetch_page_blocks(page_id, headers, session)
     print(f"    Clearing {len(existing_blocks)} existing blocks...")
 
-    # 2. Delete existing blocks
-    for block in existing_blocks:
-        block_id = block.get("id")
-        if block_id:
-            url = f"{NOTION_API_BASE}/blocks/{block_id}"
-            try:
-                retry_with_backoff(
-                    lambda url=url: requests.delete(url, headers=headers, timeout=60)
-                )
-            except Exception as e:
-                print(f"    Warning: Failed to delete block {block_id}: {e}")
-            time.sleep(0.1)  # Rate limit
+    # 2. Delete existing blocks IN PARALLEL for speed
+    def delete_block(block_id: str) -> bool:
+        """Delete a single block."""
+        url = f"{NOTION_API_BASE}/blocks/{block_id}"
+        try:
+            retry_with_backoff(
+                lambda url=url: http.delete(url, headers=headers, timeout=60)
+            )
+            return True
+        except Exception as e:
+            print(f"    Warning: Failed to delete block {block_id}: {e}")
+            return False
+
+    block_ids = [b.get("id") for b in existing_blocks if b.get("id")]
+    if block_ids:
+        with ThreadPoolExecutor(max_workers=BLOCK_DELETE_WORKERS) as executor:
+            list(executor.map(delete_block, block_ids))
 
     # 3. Convert rubric to Notion blocks
     new_blocks = markdown_to_notion_blocks(rubric_text)
@@ -386,19 +636,26 @@ def save_rubric_to_notion(rubric_text, page_id, headers):
     for i in range(0, len(new_blocks), 100):
         batch = new_blocks[i:i + 100]
         retry_with_backoff(
-            lambda batch=batch: requests.patch(url, headers=headers, json={"children": batch}, timeout=60)
+            lambda batch=batch: http.patch(url, headers=headers, json={"children": batch}, timeout=60)
         )
-        time.sleep(0.3)  # Rate limit between batches
+        time.sleep(0.1)  # Reduced from 0.3s - retry_with_backoff handles rate limits
 
     return True
 
 
-def call_claude(prompt, anthropic_key, max_tokens=4096):
+def call_claude(prompt, anthropic_key, max_tokens=4096, session=None):
     """
     Call Claude API with the given prompt.
 
+    Args:
+        prompt: The prompt to send to Claude
+        anthropic_key: Anthropic API key
+        max_tokens: Maximum tokens in response
+        session: Optional requests.Session for connection pooling
+
     Returns the response text or raises an exception.
     """
+    http = session or requests
     headers = {
         "x-api-key": anthropic_key,
         "anthropic-version": "2023-06-01",
@@ -414,7 +671,7 @@ def call_claude(prompt, anthropic_key, max_tokens=4096):
     }
 
     response = retry_with_backoff(
-        lambda: requests.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=60)
+        lambda: http.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=120)
     )
 
     data = response.json()
@@ -424,12 +681,12 @@ def call_claude(prompt, anthropic_key, max_tokens=4096):
     raise Exception(f"Unexpected Claude response format: {data}")
 
 
-def generate_rubric(horizons_content, anthropic_key):
+def generate_rubric(horizons_content, anthropic_key, session=None):
     """
     Generate a scoring rubric based on the Horizons of Focus content.
 
     Uses GTD (Getting Things Done) framework for prioritization.
-    Returns the rubric as a string.
+    Returns the rubric as a formatted string with special markers for Notion blocks.
     """
     prompt = f"""You are helping implement a David Allen GTD (Getting Things Done) prioritization system.
 
@@ -457,33 +714,101 @@ The Horizons document includes:
 ## Scoring Guidelines
 Goals spanning MULTIPLE Focus Areas indicate higher strategic leverage.
 
-Score ranges:
-- 90-100: Directly advances a high-leverage goal (3+ Focus Areas) - "This IS who I want to be"
-- 75-89: Directly advances a focused goal (1-2 Focus Areas) - "This supports my goals"
-- 50-74: Supports an Area of Focus with active goals - "This maintains important areas"
-- 30-49: Aligns with values but no direct goal connection - "This feels right but isn't urgent"
-- 10-29: Maintenance/neutral - "Necessary but not identity-aligned"
-- 0-9: Misaligned or distraction - "This pulls me away from who I want to be"
-
 ---
 HORIZONS OF FOCUS:
 {horizons_content}
 ---
 
-Create a specific rubric based on THIS person's stated horizons that can evaluate their tasks. Be concrete - reference their actual goals, values, and areas."""
+## OUTPUT FORMAT (CRITICAL - Follow exactly)
+
+You MUST format your response using these special markers for beautiful Notion formatting:
+
+1. Use emojis in headers: # 🎯 Title
+2. Use [CALLOUT:emoji] text [/CALLOUT] for important callout boxes
+3. Use [TABLE] and [/TABLE] for tables with | separators
+4. Use --- for section dividers
+
+Here is the EXACT structure to follow:
+
+# 🎯 Horizon Score Rubric
+
+[CALLOUT:📋] This rubric evaluates how well your tasks align with your stated Horizons of Focus - your purpose, values, vision, and goals. Use it to prioritize flexible tasks based on who you want to be. [/CALLOUT]
+
+---
+
+## 📊 Score Ranges
+
+[TABLE]
+Score | Meaning | Criteria
+90-100 | 🔥 High Leverage | Directly advances a goal spanning 3+ Focus Areas - "This IS who I want to be"
+75-89 | ✅ Goal-Aligned | Directly advances a focused goal (1-2 Focus Areas) - "This supports my goals"
+50-74 | 📁 Area Support | Supports an Area of Focus with active goals - "This maintains important areas"
+30-49 | 💭 Values-Aligned | Aligns with values but no direct goal connection - "This feels right but isn't urgent"
+10-29 | 🔧 Maintenance | Necessary but not identity-aligned - "Needs doing but doesn't define me"
+0-9 | ⚠️ Misaligned | Distraction from priorities - "This pulls me away from who I want to be"
+[/TABLE]
+
+---
+
+## 🎯 Your High-Leverage Goals (90-100 points)
+
+[CALLOUT:💡] Tasks that directly advance these goals score 90-100. These goals span multiple Focus Areas, meaning progress here creates compounding benefits. [/CALLOUT]
+
+(List their actual goals that span 3+ focus areas with descriptions)
+
+---
+
+## ✅ Your Focused Goals (75-89 points)
+
+(List their goals that span 1-2 focus areas)
+
+---
+
+## 📁 Your Active Focus Areas (50-74 points)
+
+[TABLE]
+Focus Area | Active Goals | Examples
+(area) | (count) | (example tasks)
+[/TABLE]
+
+---
+
+## 💭 Values & Purpose Alignment (30-49 points)
+
+(Reference their actual core values and purpose statement)
+
+---
+
+## 🔧 Maintenance Tasks (10-29 points)
+
+(General life maintenance that doesn't advance goals)
+
+---
+
+## ⚠️ Potential Distractions (0-9 points)
+
+[CALLOUT:⚠️] Be cautious of tasks that don't align with any stated goal, value, or focus area. These may be distractions pulling you away from your priorities. [/CALLOUT]
+
+Create this rubric based on THIS person's specific horizons. Be concrete - use their actual goals, values, and areas."""
 
     print("Generating scoring rubric from Horizons of Focus...")
-    rubric = call_claude(prompt, anthropic_key)
+    rubric = call_claude(prompt, anthropic_key, session=session)
     print(f"Rubric generated ({len(rubric)} characters)")
     return rubric
 
 
-def query_tasks(database_id, headers):
+def query_tasks(database_id, headers, session=None):
     """
     Query all tasks with List property in target values and no due date.
 
+    Args:
+        database_id: Notion database ID
+        headers: API headers
+        session: Optional requests.Session for connection pooling
+
     Returns a list of task objects with their properties.
     """
+    http = session or requests
     all_tasks = []
     url = f"{NOTION_API_BASE}/databases/{database_id}/query"
     start_cursor = None
@@ -517,7 +842,7 @@ def query_tasks(database_id, headers):
 
         try:
             response = retry_with_backoff(
-                lambda fp=filter_payload: requests.post(url, headers=headers, json=fp, timeout=60)
+                lambda fp=filter_payload: http.post(url, headers=headers, json=fp, timeout=60)
             )
             data = response.json()
         except Exception as e:
@@ -551,8 +876,8 @@ def query_tasks(database_id, headers):
         start_cursor = data.get("next_cursor")
         if start_cursor:
             filter_payload["start_cursor"] = start_cursor
-        # Small delay between pagination requests
-        time.sleep(0.3)
+        # Small delay between pagination requests - reduced from 0.3s
+        time.sleep(0.1)
 
     return all_tasks
 
@@ -633,9 +958,15 @@ def extract_task_info(task):
     return task_info
 
 
-def score_tasks_batch(tasks, rubric, anthropic_key):
+def score_tasks_batch(tasks, rubric, anthropic_key, session=None):
     """
     Score a batch of tasks using Claude.
+
+    Args:
+        tasks: List of task info dicts
+        rubric: Scoring rubric string
+        anthropic_key: Anthropic API key
+        session: Optional requests.Session for connection pooling
 
     Returns a list of {task_id, score, reasoning} dicts.
     """
@@ -677,32 +1008,41 @@ Return your response as a JSON array with this exact format:
 
 IMPORTANT: Return ONLY the JSON array, no other text."""
 
-    response_text = call_claude(prompt, anthropic_key)
+    response_text = call_claude(prompt, anthropic_key, session=session)
 
-    # Parse JSON response
+    # Parse JSON response - FAIL LOUDLY on parse errors
     try:
         # Find JSON array in response
         start_idx = response_text.find('[')
         end_idx = response_text.rfind(']') + 1
         if start_idx == -1 or end_idx == 0:
-            print(f"  No JSON array found in Claude response")
-            print(f"  Response was: {response_text[:500]}...")
-            return []
+            raise HorizonScoringError(
+                f"No JSON array found in Claude response. "
+                f"Response was: {response_text[:500]}..."
+            )
         json_str = response_text[start_idx:end_idx]
         scores = json.loads(json_str)
         return scores
     except json.JSONDecodeError as e:
-        print(f"  Error parsing Claude response as JSON: {e}")
-        print(f"  Response was: {response_text[:500]}...")
-        return []
+        raise HorizonScoringError(
+            f"Failed to parse Claude response as JSON: {e}. "
+            f"Response was: {response_text[:500]}..."
+        ) from e
 
 
-def update_horizon_score(task_id, score, headers):
+def update_horizon_score(task_id, score, headers, session=None):
     """
     Update a task's Horizon Score property in Notion.
 
+    Args:
+        task_id: Notion page ID
+        score: Score value (0-100)
+        headers: API headers
+        session: Optional requests.Session for connection pooling
+
     Returns True on success, False on failure.
     """
+    http = session or requests
     url = f"{NOTION_API_BASE}/pages/{task_id}"
     payload = {
         "properties": {
@@ -712,7 +1052,7 @@ def update_horizon_score(task_id, score, headers):
 
     try:
         retry_with_backoff(
-            lambda: requests.patch(url, headers=headers, json=payload, timeout=60)
+            lambda: http.patch(url, headers=headers, json=payload, timeout=60)
         )
         return True
     except Exception as e:
@@ -720,7 +1060,7 @@ def update_horizon_score(task_id, score, headers):
         return False
 
 
-def score_all_batches_parallel(task_batches, rubric, anthropic_key):
+def score_all_batches_parallel(task_batches, rubric, anthropic_key, session=None):
     """
     Score multiple batches of tasks in parallel using ThreadPoolExecutor.
 
@@ -728,11 +1068,16 @@ def score_all_batches_parallel(task_batches, rubric, anthropic_key):
         task_batches: List of task info lists (each batch is a list of task dicts)
         rubric: The scoring rubric string
         anthropic_key: Anthropic API key
+        session: Optional requests.Session for connection pooling
 
     Returns:
         List of score dicts with task_id, score, and reasoning
+
+    Raises:
+        HorizonScoringError: If ANY batch fails to score (fail loudly)
     """
     all_scores = []
+    failed_batches = []
     total_batches = len(task_batches)
 
     print(f"  Scoring {total_batches} batches with {SCORING_WORKERS} parallel workers...")
@@ -740,7 +1085,7 @@ def score_all_batches_parallel(task_batches, rubric, anthropic_key):
     with ThreadPoolExecutor(max_workers=SCORING_WORKERS) as executor:
         # Submit all batches for parallel execution
         future_to_batch = {
-            executor.submit(score_tasks_batch, batch, rubric, anthropic_key): i
+            executor.submit(score_tasks_batch, batch, rubric, anthropic_key, session): i
             for i, batch in enumerate(task_batches)
         }
 
@@ -753,17 +1098,27 @@ def score_all_batches_parallel(task_batches, rubric, anthropic_key):
                 print(f"  Batch {batch_num + 1}/{total_batches} complete ({len(scores)} scores)")
             except Exception as e:
                 print(f"  Batch {batch_num + 1}/{total_batches} failed: {e}")
+                failed_batches.append((batch_num + 1, str(e)))
+
+    # FAIL LOUDLY if ANY batch failed
+    if failed_batches:
+        failed_info = ", ".join([f"Batch {num}: {err}" for num, err in failed_batches])
+        raise HorizonScoringError(
+            f"{len(failed_batches)}/{total_batches} batches failed to score. "
+            f"Failures: {failed_info}"
+        )
 
     return all_scores
 
 
-def update_scores_parallel(scores, headers):
+def update_scores_parallel(scores, headers, session=None):
     """
     Update Notion pages with scores in parallel using ThreadPoolExecutor.
 
     Args:
         scores: List of score dicts with task_id, score, reasoning
         headers: Notion API headers
+        session: Optional requests.Session for connection pooling
 
     Returns:
         Tuple of (successful_updates, errors)
@@ -786,7 +1141,7 @@ def update_scores_parallel(scores, headers):
         except (ValueError, TypeError):
             return task_id, None, False, f"Invalid score value: {raw_score}", score_data
 
-        success = update_horizon_score(task_id, score, headers)
+        success = update_horizon_score(task_id, score, headers, session)
         return task_id, score, success, reasoning, None
 
     print(f"  Updating {total} tasks with {UPDATE_WORKERS} parallel workers...")
@@ -820,6 +1175,15 @@ def update_scores_parallel(scores, headers):
                     "error": "Failed to update Notion"
                 })
 
+    # FAIL LOUDLY if error rate exceeds 20%
+    if total > 0:
+        error_rate = len(errors) / total
+        if error_rate > 0.20:
+            raise HorizonScoringError(
+                f"Update failure rate too high: {len(errors)}/{total} ({error_rate:.0%}) failed. "
+                f"Threshold is 20%. First few errors: {errors[:3]}"
+            )
+
     return successful, errors
 
 
@@ -850,77 +1214,109 @@ def handler(pd: "pipedream"):
     goals_db_id = os.environ.get("NOTION_GOALS_DB_ID")
     core_values_db_id = os.environ.get("NOTION_CORE_VALUES_DB_ID")
 
-    # --- 2. Set up headers ---
+    # --- 2. Set up headers and sessions for connection pooling ---
     notion_headers = {
         "Authorization": f"Bearer {notion_token}",
         "Content-Type": "application/json",
         "Notion-Version": NOTION_API_VERSION,
     }
 
+    # Create sessions for connection pooling (reuses TCP connections)
+    notion_session = requests.Session()
+    notion_session.headers.update(notion_headers)
+    anthropic_session = requests.Session()
+
     successful_updates = []
     errors = []
 
     try:
-        # --- 3. Fetch Horizons of Focus content ---
-        print("Step 1: Fetching Horizons of Focus page content...")
-        blocks = fetch_page_blocks(horizons_page_id, notion_headers)
-        horizons_content = parse_blocks_to_text(blocks)
+        # --- 3. Fetch all data in PARALLEL for speed ---
+        print("Step 1: Fetching Horizons, Core Values, and Goals in parallel...")
+
+        # Helper functions for parallel execution (use sessions)
+        def fetch_horizons():
+            blocks = fetch_page_blocks(horizons_page_id, notion_headers, notion_session)
+            content = parse_blocks_to_text(blocks)
+            return blocks, content
+
+        def fetch_values_safe():
+            if not core_values_db_id:
+                return None
+            try:
+                return fetch_core_values(core_values_db_id, notion_headers, notion_session)
+            except Exception as e:
+                print(f"  Warning: Could not fetch Core Values: {e}")
+                return None
+
+        def fetch_goals_safe():
+            if not goals_db_id:
+                return None
+            try:
+                return fetch_in_progress_goals(goals_db_id, notion_headers, notion_session)
+            except Exception as e:
+                print(f"  Warning: Could not fetch Goals: {e}")
+                return None
+
+        # Execute all fetches in parallel
+        with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as executor:
+            horizons_future = executor.submit(fetch_horizons)
+            values_future = executor.submit(fetch_values_safe)
+            goals_future = executor.submit(fetch_goals_safe)
+
+            # Wait for all results
+            blocks, horizons_content = horizons_future.result()
+            core_values = values_future.result()
+            goals = goals_future.result()
+
         print(f"  Fetched {len(blocks)} blocks, {len(horizons_content)} characters of content")
 
         if not horizons_content.strip():
-            raise Exception("Horizons of Focus page is empty or has no readable content")
+            raise HorizonScoringError("Horizons of Focus page is empty or has no readable content")
 
-        # --- 3b. Fetch Core Values from inline database (if configured) ---
-        if core_values_db_id:
-            print("  Fetching Core Values database...")
-            try:
-                core_values = fetch_core_values(core_values_db_id, notion_headers)
-                if core_values:
-                    horizons_content += "\n\n## Core Values\n"
-                    for value in core_values:
-                        horizons_content += f"• {value}\n"
-                    print(f"  Added {len(core_values)} core values")
-                else:
-                    print("  No core values found")
-            except Exception as e:
-                print(f"  Warning: Could not fetch Core Values: {e}")
+        # --- 3b. Append Core Values to horizons content ---
+        if core_values:
+            horizons_content += "\n\n## Core Values\n"
+            for value in core_values:
+                horizons_content += f"• {value}\n"
+            print(f"  Added {len(core_values)} core values")
+        elif core_values_db_id:
+            print("  No core values found")
         else:
             print("  NOTION_CORE_VALUES_DB_ID not set, skipping Core Values")
 
-        # --- 3c. Fetch In Progress Goals from inline database (if configured) ---
-        if goals_db_id:
-            print("  Fetching Goals database...")
-            try:
-                goals = fetch_in_progress_goals(goals_db_id, notion_headers)
-                if goals:
-                    horizons_content += "\n\n## In Progress Goals (ordered by cross-area impact)\n"
-                    for goal in goals:
-                        areas_str = ", ".join(goal["focus_areas"]) if goal["focus_areas"] else "No specific area"
-                        horizons_content += f"• {goal['name']} [Focus Areas: {areas_str}]\n"
-                    print(f"  Added {len(goals)} in-progress goals")
+        # --- 3c. Append In Progress Goals to horizons content ---
+        if goals:
+            horizons_content += "\n\n## In Progress Goals (ordered by cross-area impact)\n"
+            for goal in goals:
+                areas_str = ", ".join(goal["focus_areas"]) if goal["focus_areas"] else "No specific area"
+                # Include description if available
+                desc = goal.get("description", "")
+                if desc:
+                    horizons_content += f"• {goal['name']} [Focus Areas: {areas_str}]\n  Description: {desc}\n"
                 else:
-                    print("  No in-progress goals found")
-            except Exception as e:
-                print(f"  Warning: Could not fetch Goals: {e}")
+                    horizons_content += f"• {goal['name']} [Focus Areas: {areas_str}]\n"
+            print(f"  Added {len(goals)} in-progress goals")
+        elif goals_db_id:
+            print("  No in-progress goals found")
         else:
             print("  NOTION_GOALS_DB_ID not set, skipping Goals")
 
         # --- 4. Generate scoring rubric ---
         print("\nStep 2: Generating scoring rubric with Claude...")
-        rubric = generate_rubric(horizons_content, anthropic_key)
+        rubric = generate_rubric(horizons_content, anthropic_key, anthropic_session)
 
         # --- 4b. Save rubric to Notion page (if configured) ---
         if rubric_page_id:
             print("  Saving rubric to Notion page...")
             try:
-                save_rubric_to_notion(rubric, rubric_page_id, notion_headers)
+                save_rubric_to_notion(rubric, rubric_page_id, notion_headers, notion_session)
                 print(f"  Rubric saved: https://notion.so/{rubric_page_id.replace('-', '')}")
             except Exception as e:
                 print(f"  Warning: Failed to save rubric to Notion: {e}")
 
         # --- 5. Query tasks ---
         print(f"\nStep 3: Querying tasks with List in {LIST_VALUES}...")
-        tasks = query_tasks(database_id, notion_headers)
+        tasks = query_tasks(database_id, notion_headers, notion_session)
         print(f"  Found {len(tasks)} tasks to score")
 
         if not tasks:
@@ -942,16 +1338,23 @@ def handler(pd: "pipedream"):
             task_infos[i:i + BATCH_SIZE]
             for i in range(0, len(task_infos), BATCH_SIZE)
         ]
-        all_scores = score_all_batches_parallel(task_batches, rubric, anthropic_key)
+        all_scores = score_all_batches_parallel(task_batches, rubric, anthropic_key, anthropic_session)
         print(f"  Received {len(all_scores)} scores from Claude")
 
         # --- 8. Update Notion with scores in parallel ---
         print("\nStep 6: Updating Horizon Scores in Notion (parallel)...")
-        successful_updates, errors = update_scores_parallel(all_scores, notion_headers)
+        successful_updates, errors = update_scores_parallel(all_scores, notion_headers, notion_session)
 
+    except HorizonScoringError:
+        # FAIL LOUDLY - re-raise scoring errors to fail the Pipedream job
+        raise
     except Exception as e:
-        print(f"Error during execution: {e}")
-        errors.append({"error": str(e), "type": "execution_error"})
+        # FAIL LOUDLY - wrap unexpected errors and re-raise
+        raise HorizonScoringError(f"Unexpected error during execution: {e}") from e
+    finally:
+        # Clean up sessions to release TCP connections
+        notion_session.close()
+        anthropic_session.close()
 
     # --- 9. Return summary ---
     status = "Completed" if not errors else "Partial"
