@@ -95,6 +95,49 @@ def retry_with_backoff(request_func, max_retries=5):
     raise Exception(f"Max retries ({max_retries}) exceeded")
 
 
+def deduplicate_by_thread(email_list):
+    """
+    Keep only the most recent email from each thread.
+
+    When multiple emails belong to the same Gmail thread (conversation),
+    this function filters to keep only the most recent one, which typically
+    contains the full conversation context (quoted replies).
+
+    Args:
+        email_list: List of email dicts with 'thread_id' and 'date' fields
+
+    Returns:
+        List of emails with one email per unique thread (the most recent)
+    """
+    from email.utils import parsedate_to_datetime
+
+    if not email_list:
+        return []
+
+    threads = {}
+    for email in email_list:
+        thread_id = email.get("thread_id") or email.get("message_id")
+
+        # Parse email date for comparison
+        email_date = None
+        date_str = email.get("date", "")
+        if date_str:
+            try:
+                email_date = parsedate_to_datetime(date_str)
+            except (ValueError, TypeError):
+                pass
+
+        # First email in thread or compare dates to keep most recent
+        if thread_id not in threads:
+            threads[thread_id] = {"email": email, "date": email_date}
+        elif email_date:
+            existing = threads[thread_id]
+            if existing["date"] is None or email_date > existing["date"]:
+                threads[thread_id] = {"email": email, "date": email_date}
+
+    return [entry["email"] for entry in threads.values()]
+
+
 def handler(pd: "pipedream"):
     # --- 1. Authentication ---
     try:
@@ -187,6 +230,9 @@ def handler(pd: "pipedream"):
             # Construct the clickable Gmail URL
             gmail_url = f"https://mail.google.com/mail/u/0/#inbox/{msg_id}"
 
+            # Extract thread ID for deduplication
+            thread_id = message_data.get('threadId', msg_id)
+
             # Append structured data with new fields
             email_details_list.append({
                 "url": gmail_url,
@@ -196,6 +242,7 @@ def handler(pd: "pipedream"):
                 "date": date_sent,
                 "message_id_header": message_id_header,
                 "message_id": msg_id,
+                "thread_id": thread_id,
                 "plain_text_body": plain_text_body if plain_text_body else "",
                 "html_body": html_body if html_body else ""
             })
@@ -209,9 +256,17 @@ def handler(pd: "pipedream"):
             failed_message_ids.append({"message_id": msg_id, "error": str(e)})
             continue
 
-    # --- 6. Return Results ---
+    # --- 6. Deduplicate by Thread ---
+    # Keep only the most recent email per thread to avoid duplicate Notion tasks
+    original_count = len(email_details_list)
+    email_details_list = deduplicate_by_thread(email_details_list)
+    deduped_count = len(email_details_list)
+
+    # --- 7. Return Results ---
     print(f"\n--- Fetch Complete ---")
-    print(f"Successfully fetched details for {len(email_details_list)} messages.")
+    print(f"Successfully fetched details for {original_count} messages.")
+    if original_count != deduped_count:
+        print(f"After thread deduplication: {deduped_count} unique threads (removed {original_count - deduped_count} duplicates)")
     if failed_message_ids:
         print(f"Failed to fetch {len(failed_message_ids)} messages: {[f['message_id'] for f in failed_message_ids]}")
 

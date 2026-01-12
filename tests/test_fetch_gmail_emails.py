@@ -9,7 +9,7 @@ import os
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from steps.fetch_gmail_emails import handler, get_header_value, get_body_parts
+from steps.fetch_gmail_emails import handler, get_header_value, get_body_parts, deduplicate_by_thread
 
 
 class TestGetHeaderValue:
@@ -184,3 +184,161 @@ class TestHandler:
 
         # Should have 1 successful result despite 1 failure
         assert len(result) == 1
+
+
+class TestDeduplicateByThread:
+    """Tests for the deduplicate_by_thread helper function."""
+
+    def test_keeps_most_recent_email_in_thread(self):
+        """Should keep only the most recent email when multiple share a thread."""
+        emails = [
+            {
+                "thread_id": "thread_123",
+                "message_id": "msg_1",
+                "subject": "Original Email",
+                "date": "Mon, 15 Jan 2024 10:00:00 -0500"
+            },
+            {
+                "thread_id": "thread_123",
+                "message_id": "msg_2",
+                "subject": "RE: Original Email",
+                "date": "Mon, 15 Jan 2024 11:30:00 -0500"  # More recent
+            }
+        ]
+        result = deduplicate_by_thread(emails)
+
+        assert len(result) == 1
+        assert result[0]["message_id"] == "msg_2"
+        assert result[0]["subject"] == "RE: Original Email"
+
+    def test_keeps_all_emails_from_different_threads(self):
+        """Should keep emails from different threads."""
+        emails = [
+            {
+                "thread_id": "thread_123",
+                "message_id": "msg_1",
+                "subject": "Email A",
+                "date": "Mon, 15 Jan 2024 10:00:00 -0500"
+            },
+            {
+                "thread_id": "thread_456",
+                "message_id": "msg_2",
+                "subject": "Email B",
+                "date": "Mon, 15 Jan 2024 11:00:00 -0500"
+            }
+        ]
+        result = deduplicate_by_thread(emails)
+
+        assert len(result) == 2
+        message_ids = [e["message_id"] for e in result]
+        assert "msg_1" in message_ids
+        assert "msg_2" in message_ids
+
+    def test_handles_empty_list(self):
+        """Should return empty list for empty input."""
+        result = deduplicate_by_thread([])
+        assert result == []
+
+    def test_handles_single_email(self):
+        """Should return single email unchanged."""
+        emails = [
+            {
+                "thread_id": "thread_123",
+                "message_id": "msg_1",
+                "subject": "Single Email",
+                "date": "Mon, 15 Jan 2024 10:00:00 -0500"
+            }
+        ]
+        result = deduplicate_by_thread(emails)
+
+        assert len(result) == 1
+        assert result[0]["message_id"] == "msg_1"
+
+    def test_uses_message_id_as_fallback_when_no_thread_id(self):
+        """Should fall back to message_id if thread_id is missing."""
+        emails = [
+            {
+                "message_id": "msg_1",
+                "subject": "Email Without Thread ID",
+                "date": "Mon, 15 Jan 2024 10:00:00 -0500"
+            },
+            {
+                "message_id": "msg_2",
+                "subject": "Another Email",
+                "date": "Mon, 15 Jan 2024 11:00:00 -0500"
+            }
+        ]
+        result = deduplicate_by_thread(emails)
+
+        # Should keep both since they have different message_ids (used as fallback)
+        assert len(result) == 2
+
+    def test_handles_invalid_date_format(self):
+        """Should handle emails with invalid date formats gracefully."""
+        emails = [
+            {
+                "thread_id": "thread_123",
+                "message_id": "msg_1",
+                "subject": "Valid Date",
+                "date": "Mon, 15 Jan 2024 10:00:00 -0500"
+            },
+            {
+                "thread_id": "thread_123",
+                "message_id": "msg_2",
+                "subject": "Invalid Date",
+                "date": "not-a-valid-date"
+            }
+        ]
+        result = deduplicate_by_thread(emails)
+
+        # Should keep one email (first one with valid date)
+        assert len(result) == 1
+
+    def test_handles_missing_date(self):
+        """Should handle emails with missing date field."""
+        emails = [
+            {
+                "thread_id": "thread_123",
+                "message_id": "msg_1",
+                "subject": "No Date",
+            },
+            {
+                "thread_id": "thread_123",
+                "message_id": "msg_2",
+                "subject": "With Date",
+                "date": "Mon, 15 Jan 2024 10:00:00 -0500"
+            }
+        ]
+        result = deduplicate_by_thread(emails)
+
+        # Should keep the one with a valid date
+        assert len(result) == 1
+        assert result[0]["message_id"] == "msg_2"
+
+    def test_handles_three_emails_same_thread(self):
+        """Should keep only the most recent of three emails in same thread."""
+        emails = [
+            {
+                "thread_id": "thread_123",
+                "message_id": "msg_1",
+                "subject": "First",
+                "date": "Mon, 15 Jan 2024 09:00:00 -0500"
+            },
+            {
+                "thread_id": "thread_123",
+                "message_id": "msg_2",
+                "subject": "Second",
+                "date": "Mon, 15 Jan 2024 10:00:00 -0500"
+            },
+            {
+                "thread_id": "thread_123",
+                "message_id": "msg_3",
+                "subject": "Third (Most Recent)",
+                "date": "Mon, 15 Jan 2024 11:00:00 -0500"
+            }
+        ]
+        result = deduplicate_by_thread(emails)
+
+        assert len(result) == 1
+        assert result[0]["message_id"] == "msg_3"
+        assert result[0]["subject"] == "Third (Most Recent)"
