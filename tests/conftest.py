@@ -61,6 +61,7 @@ def sample_email():
     return {
         "message_id": "msg_abc123",
         "message_id_header": "<test@example.com>",
+        "thread_id": "thread_abc123",
         "subject": "Test Email Subject",
         "sender": "John Doe <john@example.com>",
         "receiver": "Jane Doe <jane@example.com>",
