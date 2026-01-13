@@ -263,7 +263,7 @@ def handler(pd: "pipedream"):
     deduped_count = len(email_details_list)
 
     # --- 7. Return Results ---
-    print(f"\n--- Fetch Complete ---")
+    print("\n--- Fetch Complete ---")
     print(f"Successfully fetched details for {original_count} messages.")
     if original_count != deduped_count:
         print(f"After thread deduplication: {deduped_count} unique threads (removed {original_count - deduped_count} duplicates)")
