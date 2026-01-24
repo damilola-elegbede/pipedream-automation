@@ -108,27 +108,62 @@ class TestCheckExistingTask:
 
 
 class TestBuildPageContentBlocks:
-    """Tests for building Notion page content blocks."""
+    """Tests for building Notion page content blocks from Claude analysis."""
 
-    def test_creates_plain_text_blocks(self):
+    def test_creates_toggle_for_plain_text(self):
+        """Original email should be in a collapsed toggle block."""
         blocks = build_page_content_blocks("This is test content", None)
         assert len(blocks) > 0
-        # Should have heading and code block
+        # Should have toggle block for original email
         block_types = [b["type"] for b in blocks]
-        assert "heading_2" in block_types
-        assert "code" in block_types
+        assert "toggle" in block_types
 
-    def test_chunks_long_content(self):
-        # Content longer than MAX_CODE_BLOCK_LENGTH (2000)
+    def test_chunks_long_content_in_toggle(self):
+        """Content longer than MAX_CODE_BLOCK_LENGTH should be chunked in toggle."""
         long_content = "A" * 5000
         blocks = build_page_content_blocks(long_content, None)
-        code_blocks = [b for b in blocks if b["type"] == "code"]
-        assert len(code_blocks) >= 3  # 5000 / 2000 = 3 blocks
+        # Find the toggle block
+        toggle_blocks = [b for b in blocks if b["type"] == "toggle"]
+        assert len(toggle_blocks) == 1
+        # Check children (code blocks) in toggle
+        toggle_children = toggle_blocks[0]["toggle"]["children"]
+        assert len(toggle_children) >= 3  # 5000 / 2000 = 3 blocks
 
-    def test_creates_embed_block_for_image(self):
-        blocks = build_page_content_blocks("", "https://hcti.io/image/test.png")
+    def test_creates_sections_from_analysis(self):
+        """Analysis should create structured sections with callout and action items."""
+        analysis = {
+            "summary": "This is a test summary",
+            "action_items": ["Task 1", "Task 2"],
+            "key_dates": [{"date": "2024-01-15", "context": "Deadline"}],
+            "important_links": [{"url": "https://example.com", "description": "Example"}],
+            "key_contacts": [{"name": "John", "email": "john@test.com", "role": "Owner"}],
+            "urgency": "high",
+            "category": "request"
+        }
+        blocks = build_page_content_blocks("Original content", analysis)
         block_types = [b["type"] for b in blocks]
-        assert "embed" in block_types
+
+        # Should have callout (summary), headings, to_do items, bullets, divider, and toggle
+        assert "callout" in block_types
+        assert "to_do" in block_types
+        assert "heading_2" in block_types
+        assert "bulleted_list_item" in block_types
+        assert "divider" in block_types
+        assert "toggle" in block_types
+
+    def test_urgency_affects_callout_emoji(self):
+        """High urgency should show red emoji, low should show green."""
+        high_analysis = {"summary": "Urgent!", "urgency": "high", "action_items": [], "key_dates": [], "important_links": [], "key_contacts": [], "category": "request"}
+        low_analysis = {"summary": "Not urgent", "urgency": "low", "action_items": [], "key_dates": [], "important_links": [], "key_contacts": [], "category": "info"}
+
+        high_blocks = build_page_content_blocks("", high_analysis)
+        low_blocks = build_page_content_blocks("", low_analysis)
+
+        high_callout = [b for b in high_blocks if b["type"] == "callout"][0]
+        low_callout = [b for b in low_blocks if b["type"] == "callout"][0]
+
+        assert high_callout["callout"]["icon"]["emoji"] == "🔴"
+        assert low_callout["callout"]["icon"]["emoji"] == "🟢"
 
 
 class TestHandler:
