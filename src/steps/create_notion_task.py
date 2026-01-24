@@ -15,13 +15,18 @@ import requests
 import time
 import re
 import json
-import random
 
 # Import analyze_email - handles both Pipedream (same directory) and test environments
 try:
     from analyze_email_with_claude import analyze_email
 except ImportError:
     from steps.analyze_email_with_claude import analyze_email
+
+# Import shared retry utility - handles both Pipedream and test environments
+try:
+    from utils.retry import retry_with_backoff
+except ImportError:
+    from steps.utils.retry import retry_with_backoff
 
 # --- Configuration ---
 PREVIOUS_STEP_NAME = "fetch_gmail_emails"
@@ -43,35 +48,6 @@ def extract_email(email_string):
     if '@' in email_string:
         return email_string.strip()
     return None
-
-
-def retry_with_backoff(request_func, max_retries=5):
-    """
-    Execute request with exponential backoff for rate limits.
-
-    Handles HTTP 429 (Too Many Requests) and 503 (Service Unavailable) errors
-    by waiting and retrying with exponential backoff. Respects Retry-After header.
-    """
-    for attempt in range(max_retries):
-        try:
-            response = request_func()
-            response.raise_for_status()
-            return response
-        except requests.HTTPError as e:
-            if e.response is not None and e.response.status_code in (429, 503) and attempt < max_retries - 1:
-                retry_after = e.response.headers.get('Retry-After')
-                if retry_after:
-                    try:
-                        wait = float(retry_after)
-                    except ValueError:
-                        wait = (2 ** attempt) + random.uniform(0, 1)
-                else:
-                    wait = (2 ** attempt) + random.uniform(0, 1)
-                print(f"Rate limited. Waiting {wait:.1f}s (attempt {attempt + 1}/{max_retries})")
-                time.sleep(wait)
-            else:
-                raise
-    raise Exception(f"Max retries ({max_retries}) exceeded")
 
 
 def build_notion_properties(email_data, gmail_message_id):

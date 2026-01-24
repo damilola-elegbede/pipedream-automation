@@ -7,54 +7,19 @@ urgency, and category.
 
 Usage: Import and call analyze_email() from create_notion_task.py
 """
-import os
 import json
-import time
-import random
 import requests
+
+# Import shared retry utility - handles both Pipedream and test environments
+try:
+    from utils.retry import retry_with_backoff
+except ImportError:
+    from steps.utils.retry import retry_with_backoff
 
 
 # --- Configuration ---
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-
-
-def retry_with_backoff(request_func, max_retries=5):
-    """
-    Execute request with exponential backoff for rate limits and timeouts.
-
-    Handles:
-    - HTTP 429 (Too Many Requests) and 503 (Service Unavailable) errors
-    - Connection timeouts and read timeouts
-    Retries with exponential backoff. Respects Retry-After header.
-    """
-    for attempt in range(max_retries):
-        try:
-            response = request_func()
-            response.raise_for_status()
-            return response
-        except (requests.Timeout, requests.ConnectionError) as e:
-            if attempt < max_retries - 1:
-                wait = (2 ** attempt) + random.uniform(0, 1)
-                print(f"Timeout/connection error: {e}. Waiting {wait:.1f}s (attempt {attempt + 1}/{max_retries})")
-                time.sleep(wait)
-            else:
-                raise
-        except requests.HTTPError as e:
-            if e.response is not None and e.response.status_code in (429, 503) and attempt < max_retries - 1:
-                retry_after = e.response.headers.get('Retry-After')
-                if retry_after:
-                    try:
-                        wait = float(retry_after)
-                    except ValueError:
-                        wait = (2 ** attempt) + random.uniform(0, 1)
-                else:
-                    wait = (2 ** attempt) + random.uniform(0, 1)
-                print(f"Rate limited. Waiting {wait:.1f}s (attempt {attempt + 1}/{max_retries})")
-                time.sleep(wait)
-            else:
-                raise
-    raise Exception(f"Max retries ({max_retries}) exceeded")
 
 
 def call_claude(prompt, anthropic_key, max_tokens=2048):
@@ -91,7 +56,7 @@ def call_claude(prompt, anthropic_key, max_tokens=2048):
     if content and len(content) > 0:
         # Concatenate all text blocks (API may return multiple content blocks)
         return "".join(part.get("text", "") for part in content if part.get("type") == "text")
-    raise Exception(f"Unexpected Claude response format: {data}")
+    raise ValueError("Unexpected Claude response format: missing text content block(s)")
 
 
 def parse_claude_response(response_text):
