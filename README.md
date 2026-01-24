@@ -119,6 +119,8 @@ The Gmail → Notion workflow uses Claude AI to extract structured information:
 - **Key Contacts**: Names, roles, and email addresses
 - **Original Email**: Preserved in a collapsed toggle
 
+> **Privacy Note**: Email content (subject, sender, body) is sent to the Anthropic API for analysis. Review [Anthropic's privacy policy](https://www.anthropic.com/privacy) before processing sensitive or regulated data.
+
 ### Duplicate Detection
 
 The `create_notion_task.py` step includes duplicate detection:
