@@ -28,6 +28,12 @@ try:
 except ImportError:
     from steps.utils.retry import retry_with_backoff
 
+# Import analyze_email - handles both Pipedream (same directory) and test environments
+try:
+    from analyze_email_with_claude import analyze_email
+except ImportError:
+    from steps.analyze_email_with_claude import analyze_email
+
 # --- Configuration ---
 PREVIOUS_STEP_NAME = "fetch_gmail_emails"
 NOTION_API_VERSION = "2022-06-28"
