@@ -406,8 +406,8 @@ def handler(pd: "pipedream"):
                 "parent": {"database_id": database_id},
                 "properties": properties_payload,
             }
-            # Log only non-sensitive identifiers (redact sender/receiver emails)
-            safe_props = {"Task name": properties_payload.get("Task name"), "Message ID": properties_payload.get("Message ID")}
+            # Log only Message ID (Task name derived from subject may contain PII)
+            safe_props = {"Message ID": properties_payload.get("Message ID")}
             print(f"  Sending request to create Notion page with properties: {json.dumps(safe_props, indent=2)}")
             response_page = retry_with_backoff(
                 lambda body=page_creation_body: requests.post(

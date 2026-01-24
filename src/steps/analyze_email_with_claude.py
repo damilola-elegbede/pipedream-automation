@@ -89,7 +89,8 @@ def call_claude(prompt, anthropic_key, max_tokens=2048):
     data = response.json()
     content = data.get("content", [])
     if content and len(content) > 0:
-        return content[0].get("text", "")
+        # Concatenate all text blocks (API may return multiple content blocks)
+        return "".join(part.get("text", "") for part in content if part.get("type") == "text")
     raise Exception(f"Unexpected Claude response format: {data}")
 
 
@@ -263,7 +264,7 @@ Rules:
 Return ONLY the JSON object, no other text."""
 
     try:
-        print(f"    Calling Claude to analyze email: {subject[:50]}...")
+        print("    Calling Claude to analyze email...")
         response = call_claude(prompt, anthropic_key)
         result = parse_claude_response(response)
         print(f"    Analysis complete. Summary length: {len(result['summary'])} chars, "
