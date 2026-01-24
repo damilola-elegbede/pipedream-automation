@@ -5,7 +5,7 @@ This repository contains Python workflow steps for Pipedream that automate tasks
 ## Overview
 
 The integrations provide:
-- **Gmail → Notion**: Automatically create Notion tasks from labeled emails
+- **Gmail → Notion**: Automatically create Notion tasks from labeled emails with AI-powered content extraction
 - **Notion → Google Tasks**: Create Google Tasks from Notion tasks with due dates
 - **Google Tasks → Notion**: Sync task completion status back to Notion
 
@@ -33,8 +33,9 @@ Each file in `src/steps/` is a self-contained Python script designed to be copie
 ### Gmail to Notion Workflow
 
 1. **fetch_gmail_emails.py** - Fetches emails with a specific label (e.g., "notion") and extracts content
-2. **create_notion_task.py** - Creates Notion database entries from email data, with duplicate detection
-3. **label_gmail_processed.py** - Labels processed emails to prevent re-processing
+2. **analyze_email_with_claude.py** - AI-powered email analysis extracting summaries, action items, dates, links, and contacts
+3. **create_notion_task.py** - Creates Notion database entries from email data with structured AI-extracted content
+4. **label_gmail_processed.py** - Labels processed emails to prevent re-processing
 
 ### Notion to Google Tasks Workflow
 
@@ -62,8 +63,9 @@ Set these in **Pipedream Settings → Environment Variables**:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `NOTION_DATABASE_ID` | Yes | Your Notion database ID (32-char hex) |
-| `HCTI_USER_ID` | Optional | HTML/CSS to Image API user ID |
-| `HCTI_API_KEY` | Optional | HTML/CSS to Image API key |
+| `ANTHROPIC_API_KEY` | Yes* | Claude API key for AI-powered email analysis |
+
+*Required for Gmail → Notion workflow with AI features
 
 ### Deploying to Pipedream
 
@@ -106,6 +108,16 @@ make format
 ```
 
 ## Key Features
+
+### AI-Powered Email Analysis
+
+The Gmail → Notion workflow uses Claude AI to extract structured information:
+- **Summary**: 2-3 sentence summary with urgency indicator
+- **Action Items**: Extracted as Notion checkboxes
+- **Key Dates**: Deadlines and important dates
+- **Important Links**: Clickable links from email content
+- **Key Contacts**: Names, roles, and email addresses
+- **Original Email**: Preserved in a collapsed toggle
 
 ### Duplicate Detection
 
