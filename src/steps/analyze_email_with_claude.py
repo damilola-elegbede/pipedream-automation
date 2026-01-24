@@ -119,7 +119,7 @@ def parse_claude_response(response_text):
         end_idx = response_text.rfind('}') + 1
 
         if start_idx == -1 or end_idx == 0:
-            print(f"    Warning: No JSON object found in Claude response")
+            print("    Warning: No JSON object found in Claude response")
             return default_result
 
         json_str = response_text[start_idx:end_idx]

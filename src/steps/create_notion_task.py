@@ -406,7 +406,9 @@ def handler(pd: "pipedream"):
                 "parent": {"database_id": database_id},
                 "properties": properties_payload,
             }
-            print(f"  Sending request to create Notion page with properties: {json.dumps(properties_payload, indent=2)}")
+            # Log only non-sensitive identifiers (redact sender/receiver emails)
+            safe_props = {"Task name": properties_payload.get("Task name"), "Message ID": properties_payload.get("Message ID")}
+            print(f"  Sending request to create Notion page with properties: {json.dumps(safe_props, indent=2)}")
             response_page = retry_with_backoff(
                 lambda body=page_creation_body: requests.post(
                     notion_pages_api_url, headers=headers, json=body, timeout=30
@@ -438,12 +440,9 @@ def handler(pd: "pipedream"):
                     chunks = [content_blocks[i:i + 100] for i in range(0, len(content_blocks), 100)]
                     for chunk_idx, chunk_data in enumerate(chunks):
                         append_blocks_body = {"children": chunk_data}
-                        print(f"    Appending content blocks (chunk {chunk_idx + 1}/{len(chunks)}) to page ID: {page_id}")
-                        try:
-                            print(f"    Attempting to send blocks payload: {json.dumps(append_blocks_body, indent=2)}")
-                        except Exception as json_e:
-                            print(f"    Could not serialize append_blocks_body for logging: {json_e}")
-                            print(f"    Raw append_blocks_body (may be large): {append_blocks_body}")
+                        # Log block types only, not full content (may contain sensitive email data)
+                        block_types = [b.get("type", "unknown") for b in chunk_data]
+                        print(f"    Appending {len(chunk_data)} blocks (chunk {chunk_idx + 1}/{len(chunks)}): {block_types}")
 
                         blocks_url = f"{notion_blocks_api_url_base}{page_id}/children"
                         retry_with_backoff(
