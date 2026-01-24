@@ -269,7 +269,9 @@ def analyze_email(subject, sender, date, body, anthropic_key):
             return ""
         # Remove potential prompt injection patterns
         sanitized = text.replace("```", "'''")  # Prevent code block escapes
-        sanitized = sanitized.replace("\\n\\n---", "")  # Remove separator patterns
+        sanitized = sanitized.replace("\n\n---", "")  # Remove separator patterns
+        sanitized = sanitized.replace("\n---\n", "")  # Remove alternate separator
+        sanitized = sanitized.replace("\r\n", "\n")  # Normalize Windows newlines
         return sanitized
 
     safe_subject = sanitize_input(subject)

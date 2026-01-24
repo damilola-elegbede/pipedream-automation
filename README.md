@@ -33,9 +33,8 @@ Each file in `src/steps/` is a self-contained Python script designed to be copie
 ### Gmail to Notion Workflow
 
 1. **fetch_gmail_emails.py** - Fetches emails with a specific label (e.g., "notion") and extracts content
-2. **analyze_email_with_claude.py** - AI-powered email analysis extracting summaries, action items, dates, links, and contacts
-3. **create_notion_task.py** - Creates Notion database entries from email data with structured AI-extracted content
-4. **label_gmail_processed.py** - Labels processed emails to prevent re-processing
+2. **create_notion_task.py** - Creates Notion database entries with AI-powered analysis (summaries, action items, dates, links, contacts)
+3. **label_gmail_processed.py** - Labels processed emails to prevent re-processing
 
 ### Notion to Google Tasks Workflow
 
