@@ -10,8 +10,11 @@ Usage: Copy-paste into a Pipedream Python step
 import logging
 import os
 import re
+from typing import Optional
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Configure logging for Pipedream
 logger = logging.getLogger()
@@ -152,50 +155,60 @@ def format_notion_date(due_date):
     return due_date.split('T')[0]
 
 
-def check_processed_by_dara(page_id, notion_token):
+def check_processed_by_dara(page_id: str, notion_token: str) -> Optional[bool]:
     """
     Check if a Notion page has "Processed by Dara" checkbox set to true.
-    
+
     Args:
         page_id: The Notion page ID (32 hex characters).
         notion_token: The Notion API token.
-    
+
     Returns:
-        True if the checkbox is checked, False otherwise.
+        True if the checkbox is checked, False if unchecked,
+        None if verification failed (missing token or API error).
     """
     if not notion_token:
         logger.warning("No Notion token available, cannot check 'Processed by Dara'")
-        return False
-    
+        return None
+
     # Format page_id with hyphens for Notion API
     formatted_id = f"{page_id[:8]}-{page_id[8:12]}-{page_id[12:16]}-{page_id[16:20]}-{page_id[20:]}"
-    
+
     url = f"https://api.notion.com/v1/pages/{formatted_id}"
     headers = {
         "Authorization": f"Bearer {notion_token}",
         "Notion-Version": "2022-06-28"
     }
-    
+
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        # Use retry with backoff for transient 429/5xx errors
+        session = requests.Session()
+        retries = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=("GET",),
+        )
+        session.mount("https://", HTTPAdapter(max_retries=retries))
+        response = session.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         page_data = response.json()
-        
+
         # Check for "Processed by Dara" checkbox property
         processed_prop = safe_get(page_data, ["properties", "Processed by Dara", "checkbox"])
-        
+
         if processed_prop is True:
-            logger.info(f"Page {page_id} has 'Processed by Dara' = True")
+            logger.info("Page %s has 'Processed by Dara' = True", page_id)
             return True
-        
+
         return False
-        
+
     except requests.RequestException as e:
-        logger.warning(f"Failed to fetch Notion page {page_id}: {e}")
-        return False
-    except Exception as e:
-        logger.warning(f"Error checking 'Processed by Dara' for page {page_id}: {e}")
-        return False
+        logger.warning("Failed to fetch Notion page %s: %s", page_id, e)
+        return None
+    except ValueError as e:
+        logger.warning("Invalid JSON for Notion page %s: %s", page_id, e)
+        return None
 
 
 def handler(pd: "pipedream"):
@@ -236,9 +249,21 @@ def handler(pd: "pipedream"):
     # to prevent overwriting Dara's status changes
     notion_token = os.environ.get("NOTION_TOKEN") or os.environ.get("NOTION_API_KEY")
     processed_by_dara = check_processed_by_dara(page_id, notion_token)
-    
+
+    if processed_by_dara is None:
+        exit_message = (
+            f"Unable to verify 'Processed by Dara' status for task '{task_title}'. "
+            "Skipping update to avoid overwriting Dara's changes."
+        )
+        logger.warning(exit_message)
+        pd.flow.exit(exit_message)
+        return
+
     if processed_by_dara:
-        exit_message = f"Task '{task_title}' has 'Processed by Dara' checked. Skipping List update to preserve Dara's status."
+        exit_message = (
+            f"Task '{task_title}' has 'Processed by Dara' checked. "
+            "Skipping List update to preserve Dara's status."
+        )
         logger.info(exit_message)
         pd.flow.exit(exit_message)
         return
