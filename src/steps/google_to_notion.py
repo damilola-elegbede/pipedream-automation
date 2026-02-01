@@ -8,7 +8,10 @@ Page ID for syncing updates back to Notion. Also syncs completion status.
 Usage: Copy-paste into a Pipedream Python step
 """
 import logging
+import os
 import re
+
+import requests
 
 # Configure logging for Pipedream
 logger = logging.getLogger()
@@ -149,6 +152,52 @@ def format_notion_date(due_date):
     return due_date.split('T')[0]
 
 
+def check_processed_by_dara(page_id, notion_token):
+    """
+    Check if a Notion page has "Processed by Dara" checkbox set to true.
+    
+    Args:
+        page_id: The Notion page ID (32 hex characters).
+        notion_token: The Notion API token.
+    
+    Returns:
+        True if the checkbox is checked, False otherwise.
+    """
+    if not notion_token:
+        logger.warning("No Notion token available, cannot check 'Processed by Dara'")
+        return False
+    
+    # Format page_id with hyphens for Notion API
+    formatted_id = f"{page_id[:8]}-{page_id[8:12]}-{page_id[12:16]}-{page_id[16:20]}-{page_id[20:]}"
+    
+    url = f"https://api.notion.com/v1/pages/{formatted_id}"
+    headers = {
+        "Authorization": f"Bearer {notion_token}",
+        "Notion-Version": "2022-06-28"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        page_data = response.json()
+        
+        # Check for "Processed by Dara" checkbox property
+        processed_prop = safe_get(page_data, ["properties", "Processed by Dara", "checkbox"])
+        
+        if processed_prop is True:
+            logger.info(f"Page {page_id} has 'Processed by Dara' = True")
+            return True
+        
+        return False
+        
+    except requests.RequestException as e:
+        logger.warning(f"Failed to fetch Notion page {page_id}: {e}")
+        return False
+    except Exception as e:
+        logger.warning(f"Error checking 'Processed by Dara' for page {page_id}: {e}")
+        return False
+
+
 def handler(pd: "pipedream"):
     """
     Processes Google Tasks triggers, checks if they originated from Notion,
@@ -182,7 +231,19 @@ def handler(pd: "pipedream"):
 
     logger.info(f"Extracted and validated Notion Page ID: {page_id}")
 
-    # --- 3. Extract Task Status (for completion sync) ---
+    # --- 3. Check if task was already processed by Dara ---
+    # If "Processed by Dara" checkbox is checked, skip updating List status
+    # to prevent overwriting Dara's status changes
+    notion_token = os.environ.get("NOTION_TOKEN") or os.environ.get("NOTION_API_KEY")
+    processed_by_dara = check_processed_by_dara(page_id, notion_token)
+    
+    if processed_by_dara:
+        exit_message = f"Task '{task_title}' has 'Processed by Dara' checked. Skipping List update to preserve Dara's status."
+        logger.info(exit_message)
+        pd.flow.exit(exit_message)
+        return
+
+    # --- 4. Extract Task Status (for completion sync) ---
     task_status = safe_get(task_data, ["status"])  # "completed" or "needsAction"
     logger.info(f"Task status: {task_status}")
 
@@ -194,12 +255,12 @@ def handler(pd: "pipedream"):
 
     logger.info(f"Mapped to Notion List value: {list_value}")
 
-    # --- 4. Extract Due Date ---
+    # --- 5. Extract Due Date ---
     due_date = safe_get(task_data, ["due"])
     notion_due_date = format_notion_date(due_date)
     logger.info(f"Due date: {notion_due_date}")
 
-    # --- 5. Prepare Return Value ---
+    # --- 6. Prepare Return Value ---
     ret_val = {
         "NotionUpdate": {
             "PageId": page_id,
@@ -213,5 +274,5 @@ def handler(pd: "pipedream"):
 
     logger.info(f"Returning: {ret_val}")
 
-    # --- 6. Return data for use in future steps ---
+    # --- 7. Return data for use in future steps ---
     return ret_val
